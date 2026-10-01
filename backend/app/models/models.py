@@ -237,3 +237,66 @@ class Notification(Base):
 
     def __repr__(self):
         return f"<Notification {self.role}: {self.title}>"
+
+class Ride(Base):
+    """Ride assignment for transporters."""
+    __tablename__ = "rides"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trip_id = Column(String(50), nullable=False, unique=True)
+    vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=False)
+    transporter_username = Column(String(50), nullable=True) # Used to filter for specific transporter
+
+    farmer_id = Column(Integer, ForeignKey("farmers.id"), nullable=False)
+    farmer_name = Column(String(100), nullable=False)
+    pickup_address = Column(String(200), nullable=False)
+    pickup_location = Column(String(200), nullable=False)
+    farmer_contact = Column(String(100), nullable=True)
+
+    buyer_id = Column(Integer, ForeignKey("buyers.id"), nullable=False)
+    buyer_name = Column(String(100), nullable=False)
+    delivery_address = Column(String(200), nullable=False)
+    destination_location = Column(String(200), nullable=False)
+    buyer_contact = Column(String(100), nullable=True)
+
+    crop = Column(String(50), nullable=False)
+    grade = Column(String(1), nullable=False)
+    quantity = Column(Float, nullable=False)
+
+    assigned_load = Column(Float, nullable=False)
+    pickup_time = Column(String(20), nullable=True)
+    expected_delivery_time = Column(String(20), nullable=True)
+    delivery_deadline = Column(String(20), nullable=True)
+
+    route = Column(Text, nullable=True)
+    status = Column(String(50), default="Assigned") # Assigned, Accepted, On the way to pickup, Arrived at pickup, Pickup completed, On the way to buyer, Delivered, Completed, Cancelled
+    created_at = Column(String(30), nullable=True)
+
+    vehicle = relationship("Vehicle")
+    farmer = relationship("Farmer")
+    buyer = relationship("Buyer")
+
+
+class RideHistory(Base):
+    """Permanent history record of completed/cancelled rides for Admin."""
+    __tablename__ = "ride_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trip_id = Column(String(50), nullable=False)
+    date = Column(String(30), nullable=False)
+    transporter_name = Column(String(100), nullable=False)
+    vehicle_number = Column(String(50), nullable=False)
+    farmer_name = Column(String(100), nullable=False)
+    farmer_address = Column(String(200), nullable=False)
+    buyer_name = Column(String(100), nullable=False)
+    buyer_address = Column(String(200), nullable=False)
+    crop = Column(String(50), nullable=False)
+    grade = Column(String(1), nullable=False)
+    quantity_collected = Column(Float, nullable=False)
+    vehicle_capacity = Column(Float, nullable=False)
+    pickup_time = Column(String(20), nullable=True)
+    delivery_time = Column(String(20), nullable=True)
+    route = Column(Text, nullable=True)
+    ride_status = Column(String(50), nullable=False)
+    completion_status = Column(String(50), nullable=False)
+
