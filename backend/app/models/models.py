@@ -14,6 +14,11 @@ class Farmer(Base):
     location = Column(String(200), nullable=False)
     farm_size = Column(Float, nullable=False)  # in hectares
     producer_type = Column(String(10), nullable=False)  # "small" or "large"
+    pan_card = Column(String(10), nullable=True)  # PAN card number (e.g. ABCDE1234F)
+    land_location = Column(String(300), nullable=True)  # Detailed land address / GPS coordinates
+    phone = Column(String(15), nullable=True)  # Contact phone
+    email = Column(String(100), nullable=True)  # Contact email
+    aadhaar_last4 = Column(String(4), nullable=True)  # Last 4 digits of Aadhaar for verification
 
     harvests = relationship("Harvest", back_populates="farmer", cascade="all, delete-orphan")
 

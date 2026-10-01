@@ -33,11 +33,31 @@ async def seed():
 
         # ──────────── FARMERS ────────────
         farmers = [
-            Farmer(name="Ravi Kumar", location="Kolar District", farm_size=2.5, producer_type="small"),
-            Farmer(name="Priya Devi", location="Chikkaballapur", farm_size=1.8, producer_type="small"),
-            Farmer(name="Suresh Reddy", location="Ramanagara", farm_size=8.0, producer_type="large"),
-            Farmer(name="Lakshmi Bai", location="Kolar District", farm_size=1.2, producer_type="small"),
-            Farmer(name="Venkat Rao", location="Tumkur", farm_size=6.5, producer_type="large"),
+            Farmer(
+                name="Ravi Kumar", location="Kolar District", farm_size=2.5, producer_type="small",
+                pan_card="ABCPK1234F", land_location="Survey No. 42/3, Mulbagal Taluk, Kolar, Karnataka — 13.1647°N, 78.3932°E",
+                phone="9876543210", email="ravi.kumar@gmail.com", aadhaar_last4="4521"
+            ),
+            Farmer(
+                name="Priya Devi", location="Chikkaballapur", farm_size=1.8, producer_type="small",
+                pan_card="BXYPS5678G", land_location="Survey No. 18/1, Gudibande Taluk, Chikkaballapur, Karnataka — 13.6139°N, 77.7066°E",
+                phone="9123456789", email="priya.devi@yahoo.com", aadhaar_last4="8734"
+            ),
+            Farmer(
+                name="Suresh Reddy", location="Ramanagara", farm_size=8.0, producer_type="large",
+                pan_card="CRXPR2345H", land_location="Survey No. 105/A, Magadi Taluk, Ramanagara, Karnataka — 12.9532°N, 77.2278°E",
+                phone="9988776655", email="suresh.agro@outlook.com", aadhaar_last4="2109"
+            ),
+            Farmer(
+                name="Lakshmi Bai", location="Kolar District", farm_size=1.2, producer_type="small",
+                pan_card="DLXPB7890J", land_location="Survey No. 7/2A, Srinivaspur Taluk, Kolar, Karnataka — 13.3350°N, 78.2123°E",
+                phone="8877665544", email="lakshmi.bai@gmail.com", aadhaar_last4="6543"
+            ),
+            Farmer(
+                name="Venkat Rao", location="Tumkur", farm_size=6.5, producer_type="large",
+                pan_card="EVXPV9012K", land_location="Survey No. 88/B, Tiptur Taluk, Tumkur, Karnataka — 13.2580°N, 76.4720°E",
+                phone="7766554433", email="venkat.rao@farm.in", aadhaar_last4="1098"
+            ),
         ]
         session.add_all(farmers)
         await session.flush()
