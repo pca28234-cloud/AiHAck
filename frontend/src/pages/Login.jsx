@@ -10,6 +10,10 @@ export default function Login() {
     e.preventDefault();
     if (role === 'farmer') {
       navigate('/farmer-dashboard');
+    } else if (role === 'buyer') {
+      navigate('/buyer-dashboard');
+    } else if (role === 'transporter') {
+      navigate('/transporter-dashboard');
     } else {
       navigate('/dashboard');
     }
