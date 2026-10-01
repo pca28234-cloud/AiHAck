@@ -26,7 +26,7 @@ app = FastAPI(
 # CORS — allow frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,9 +39,49 @@ app.include_router(vehicles.router, prefix="/api", tags=["Vehicles"])
 app.include_router(ai.router, prefix="/api/ai", tags=["AI Coordination"])
 app.include_router(dashboard.router, prefix="/api", tags=["Dashboard"])
 
+# --- HACKATHON LIVE DEMO ENDPOINTS ---
+live_links = []
+from pydantic import BaseModel
+class DemoLink(BaseModel):
+    farmer: str
+    farmerLoc: str
+    transporter: str
+    buyer: str
+    buyerLoc: str
+    volume: float
+    quality: str
+    status: str
+    date: str
+
+@app.post("/api/links", tags=["Demo"])
+async def create_link(link: DemoLink):
+    new_link = link.dict()
+    new_link["id"] = len(live_links) + 1
+    live_links.insert(0, new_link) # Add to top
+    return new_link
+
+@app.get("/api/links", tags=["Demo"])
+async def get_links():
+    return live_links
+# -----------------------------------
+
+@app.get("/health", tags=["Health"])
+async def health_check():
+    return {"status": "healthy"}
+
+# --- SERVE UNIFIED FRONTEND SPA AT SINGLE LOCALHOST PORT ---
+import os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
+
+FRONTEND_DIST = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"))
 
 @app.get("/", tags=["Health"])
 async def root():
+    index_file = os.path.join(FRONTEND_DIST, "index.html")
+    if os.path.isfile(index_file):
+        return FileResponse(index_file)
     return {
         "name": "HarvestLink AI",
         "tagline": "Turning scattered harvests into coordinated deliveries.",
@@ -49,7 +89,21 @@ async def root():
         "version": "1.0.0",
     }
 
+if os.path.exists(FRONTEND_DIST):
+    assets_dir = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-@app.get("/health", tags=["Health"])
-async def health_check():
-    return {"status": "healthy"}
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api") or full_path.startswith("docs") or full_path == "openapi.json":
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = os.path.join(FRONTEND_DIST, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        index_file = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
