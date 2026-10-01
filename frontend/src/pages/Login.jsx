@@ -20,7 +20,7 @@ export default function Login() {
   };
 
   const handleAdminLogin = () => {
-    navigate('/dashboard');
+    navigate('/admin-login');
   };
 
   return (

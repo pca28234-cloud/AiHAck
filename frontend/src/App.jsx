@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-route
 import Navbar from './components/Navbar';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
+import AdminLogin from './pages/AdminLogin';
 import Dashboard from './pages/Dashboard';
 import FarmerDashboard from './pages/FarmerDashboard';
 import BuyerDashboard from './pages/BuyerDashboard';
@@ -14,7 +15,7 @@ import AICoordination from './pages/AICoordination';
 
 function AppContent() {
   const location = useLocation();
-  const isAuthPage = location.pathname === '/' || location.pathname === '/landing';
+  const isAuthPage = location.pathname === '/' || location.pathname === '/landing' || location.pathname === '/admin-login';
   const isFarmerPage = location.pathname === '/farmer-dashboard';
   const isBuyerPage = location.pathname === '/buyer-dashboard';
   const isTransporterPage = location.pathname === '/transporter-dashboard';
@@ -24,6 +25,7 @@ function AppContent() {
       {!isAuthPage && !isFarmerPage && !isBuyerPage && !isTransporterPage && <Navbar />}
       <Routes>
         <Route path="/" element={<Login />} />
+        <Route path="/admin-login" element={<AdminLogin />} />
         <Route path="/landing" element={<Landing />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/farmer-dashboard" element={<FarmerDashboard />} />

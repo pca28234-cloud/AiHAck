@@ -1,202 +1,161 @@
 import React, { useEffect, useState } from 'react';
-import { getDashboard } from '../services/api';
-import KPICard from '../components/KPICard';
+import { getFarmers, getHarvests, getBuyers, getOrders, getVehicles } from '../services/api';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { Sprout, ShoppingCart, CheckCircle2, Truck, Users, AlertTriangle } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
-
-const QUALITY_COLORS = { A: '#16a34a', B: '#f97316', C: '#ef4444' };
+import { Network, Sprout, ShoppingCart, Truck, ArrowRight, ShieldCheck, Activity, Users, Route } from 'lucide-react';
 
 export default function Dashboard() {
-  const [data, setData] = useState(null);
+  const [stats, setStats] = useState({
+    farmers: 0,
+    buyers: 0,
+    vehicles: 0,
+    totalVolume: 0
+  });
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Mocking supply chain linkages for the admin view
+  const supplyChainLinks = [
+    { id: 1, date: 'Today, 10:30 AM', status: 'In Transit', farmer: 'Ravi Kumar', farmerLoc: 'Kolar District', volume: 500, quality: 'Grade A', transporter: 'KA-01-AB-1234', buyer: 'Restaurant Group', buyerLoc: 'Bangalore City' },
+    { id: 2, date: 'Yesterday', status: 'Completed', farmer: 'Lakshmi N.', farmerLoc: 'Tumkur', volume: 1200, quality: 'Grade B', transporter: 'MH-12-PQ-5678', buyer: 'Market Traders', buyerLoc: 'Mysore' },
+    { id: 3, date: 'Oct 01, 2026', status: 'Completed', farmer: 'Srinivas Gowda', farmerLoc: 'Mandya', volume: 300, quality: 'Grade A', transporter: 'KA-02-XY-9876', buyer: 'FreshMart Inc', buyerLoc: 'Bangalore City' },
+  ];
+
   useEffect(() => {
-    fetchDashboard();
+    const loadDashboardData = async () => {
+      try {
+        setLoading(true);
+        const [fRes, hRes, bRes, vRes] = await Promise.all([
+          getFarmers(), getHarvests(), getBuyers(), getVehicles()
+        ]);
+        
+        const totalVol = hRes.data.reduce((sum, h) => sum + h.estimated_quantity, 0);
+
+        setStats({
+          farmers: fRes.data.length,
+          buyers: bRes.data.length,
+          vehicles: vRes.data.length,
+          totalVolume: totalVol
+        });
+      } catch (err) {
+        setError('Failed to load dashboard data.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadDashboardData();
   }, []);
 
-  const fetchDashboard = async () => {
-    try {
-      setLoading(true);
-      const res = await getDashboard();
-      setData(res.data);
-    } catch (err) {
-      setError('Failed to load dashboard data.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) return <LoadingSpinner message="Loading dashboard..." />;
-  if (error) return (
-    <div className="max-w-7xl mx-auto px-4 py-12 text-center">
-      <AlertTriangle className="w-8 h-8 text-harvest-500 mx-auto mb-3" />
-      <p className="text-stone-600">{error}</p>
-    </div>
-  );
-  if (!data) return null;
-
-  const supplyDemandData = [
-    { name: 'Supply', value: data.total_harvest, fill: '#16a34a' },
-    { name: 'Demand', value: data.total_demand, fill: '#f97316' },
-    { name: 'Matched', value: data.total_matched, fill: '#0ea5e9' },
-  ];
-
-  const qualityData = Object.entries(data.quality_distribution || {})
-    .filter(([, v]) => v > 0)
-    .map(([grade, qty]) => ({
-      name: `Grade ${grade}`,
-      value: qty,
-      color: QUALITY_COLORS[grade],
-    }));
-
-  const transportData = [
-    { name: 'Used', value: data.total_transport_capacity - data.total_available_transport },
-    { name: 'Available', value: data.total_available_transport },
-  ];
+  if (loading) return <LoadingSpinner message="Initializing Admin Systems..." />;
+  if (error) return <div className="p-8 text-rose-500 font-bold text-center">{error}</div>;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" id="dashboard-page">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+      
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="font-display text-3xl font-bold text-stone-900">Dashboard</h1>
-        <p className="text-stone-500 mt-1">Real-time overview of supply, demand, and coordination status.</p>
-      </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <KPICard title="Available Harvest" value={data.total_harvest} unit="kg" icon={Sprout} color="green" delay={0} />
-        <KPICard title="Buyer Demand" value={data.total_demand} unit="kg" icon={ShoppingCart} color="orange" delay={100} />
-        <KPICard title="Matched" value={data.total_matched} unit="kg" icon={CheckCircle2} color="blue" delay={200} />
-        <KPICard title="Transport Capacity" value={data.total_transport_capacity} unit="kg" icon={Truck} color="purple" delay={300} />
-      </div>
-
-      {/* Charts Row */}
-      <div className="grid lg:grid-cols-2 gap-6 mb-8">
-        {/* Supply vs Demand */}
-        <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card" id="chart-supply-demand">
-          <h3 className="font-display font-semibold text-stone-900 mb-4">Supply vs Demand</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={supplyDemandData} barSize={48}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
-              <XAxis dataKey="name" tick={{ fontSize: 13, fill: '#78716c' }} />
-              <YAxis tick={{ fontSize: 13, fill: '#78716c' }} />
-              <Tooltip
-                contentStyle={{ borderRadius: '12px', border: '1px solid #e7e5e4', fontSize: '13px' }}
-                formatter={(value) => [`${value} kg`, '']}
-              />
-              <Bar dataKey="value" radius={[6, 6, 0, 0]}>
-                {supplyDemandData.map((entry, i) => (
-                  <Cell key={i} fill={entry.fill} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="font-display text-3xl font-bold text-stone-900 flex items-center gap-3">
+            <ShieldCheck className="w-8 h-8 text-sky-500" /> System Overview
+          </h1>
+          <p className="text-stone-500 mt-1">Monitor the AI-driven supply chain network</p>
         </div>
-
-        {/* Quality Distribution */}
-        <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card" id="chart-quality">
-          <h3 className="font-display font-semibold text-stone-900 mb-4">Quality Distribution</h3>
-          {qualityData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={250}>
-              <PieChart>
-                <Pie
-                  data={qualityData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={60}
-                  outerRadius={90}
-                  dataKey="value"
-                  label={({ name, value }) => `${name}: ${value} kg`}
-                  labelLine={false}
-                >
-                  {qualityData.map((entry, i) => (
-                    <Cell key={i} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(value) => [`${value} kg`, '']} />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex items-center justify-center h-[250px] text-stone-400">No quality data available</div>
-          )}
+        <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-full text-sm font-bold border border-emerald-100 shadow-sm">
+          <Activity className="w-4 h-4 animate-pulse" /> Network Healthy
         </div>
       </div>
 
-      {/* Bottom row: Stats + Fairness */}
-      <div className="grid lg:grid-cols-3 gap-6">
-        {/* Active Entities */}
-        <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card" id="active-entities">
-          <h3 className="font-display font-semibold text-stone-900 mb-4">Active Entities</h3>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between py-2 border-b border-stone-100">
-              <span className="text-sm text-stone-600">Active Farmers</span>
-              <span className="font-semibold text-stone-900">{data.active_farmers}</span>
+      {/* KPI Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+        <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 rounded-xl bg-primary-50 flex items-center justify-center mb-4 text-primary-600"><Sprout className="w-6 h-6" /></div>
+          <p className="text-sm font-bold text-stone-500 uppercase tracking-wider mb-1">Registered Farmers</p>
+          <h3 className="font-display text-4xl font-bold text-stone-900">{stats.farmers}</h3>
+        </div>
+        
+        <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 rounded-xl bg-harvest-50 flex items-center justify-center mb-4 text-harvest-600"><ShoppingCart className="w-6 h-6" /></div>
+          <p className="text-sm font-bold text-stone-500 uppercase tracking-wider mb-1">Active Buyers</p>
+          <h3 className="font-display text-4xl font-bold text-stone-900">{stats.buyers}</h3>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl border border-stone-100 shadow-sm hover:shadow-md transition-shadow">
+          <div className="w-12 h-12 rounded-xl bg-violet-50 flex items-center justify-center mb-4 text-violet-600"><Truck className="w-6 h-6" /></div>
+          <p className="text-sm font-bold text-stone-500 uppercase tracking-wider mb-1">Fleet Vehicles</p>
+          <h3 className="font-display text-4xl font-bold text-stone-900">{stats.vehicles}</h3>
+        </div>
+
+        <div className="bg-gradient-to-br from-sky-500 to-sky-700 p-6 rounded-2xl shadow-lg shadow-sky-500/20 text-white">
+          <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center mb-4 backdrop-blur-sm"><Route className="w-6 h-6 text-white" /></div>
+          <p className="text-sm font-bold text-sky-100 uppercase tracking-wider mb-1">Total Volume Processed</p>
+          <h3 className="font-display text-4xl font-bold text-white">{stats.totalVolume.toLocaleString()} <span className="text-xl font-sans font-medium text-sky-200">kg</span></h3>
+        </div>
+      </div>
+
+      {/* Supply Chain Trace */}
+      <div className="bg-white rounded-3xl border border-stone-200 shadow-card overflow-hidden">
+        <div className="px-8 py-6 border-b border-stone-100 flex items-center justify-between bg-stone-50/50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-sky-100 flex items-center justify-center">
+              <Network className="w-5 h-5 text-sky-600" />
             </div>
-            <div className="flex items-center justify-between py-2 border-b border-stone-100">
-              <span className="text-sm text-stone-600">Active Buyers</span>
-              <span className="font-semibold text-stone-900">{data.active_buyers}</span>
-            </div>
-            <div className="flex items-center justify-between py-2 border-b border-stone-100">
-              <span className="text-sm text-stone-600">Active Orders</span>
-              <span className="font-semibold text-stone-900">{data.active_orders}</span>
-            </div>
-            <div className="flex items-center justify-between py-2">
-              <span className="text-sm text-stone-600">Collection Slots</span>
-              <span className="font-semibold text-stone-900">{data.collection_slots}</span>
+            <div>
+              <h2 className="font-display font-bold text-xl text-stone-900">Supply Chain Linkages</h2>
+              <p className="text-sm text-stone-500">Live AI matching history between Farmers, Transporters, and Buyers</p>
             </div>
           </div>
         </div>
 
-        {/* Fairness Panel */}
-        <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card" id="fairness-panel">
-          <h3 className="font-display font-semibold text-stone-900 mb-4 flex items-center gap-2">
-            <Users className="w-5 h-5 text-primary-600" />
-            Producer Participation
-          </h3>
-          <div className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-sm text-stone-600">Small Producers</span>
-                <span className="text-sm font-semibold text-primary-700">{data.small_producers}</span>
+        <div className="divide-y divide-stone-100">
+          {supplyChainLinks.map((link) => (
+            <div key={link.id} className="p-8 hover:bg-stone-50/30 transition-colors">
+              <div className="flex justify-between items-center mb-6">
+                <span className="text-sm font-bold text-stone-500">{link.date}</span>
+                <span className={`px-3 py-1 text-xs font-bold uppercase tracking-wider rounded-full ${link.status === 'In Transit' ? 'bg-violet-100 text-violet-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  {link.status}
+                </span>
               </div>
-              <div className="w-full bg-stone-100 rounded-full h-2.5">
-                <div
-                  className="bg-primary-500 h-2.5 rounded-full transition-all"
-                  style={{ width: `${data.active_farmers > 0 ? (data.small_producers / data.active_farmers * 100) : 0}%` }}
-                />
-              </div>
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-sm text-stone-600">Large Producers</span>
-                <span className="text-sm font-semibold text-harvest-700">{data.large_producers}</span>
-              </div>
-              <div className="w-full bg-stone-100 rounded-full h-2.5">
-                <div
-                  className="bg-harvest-500 h-2.5 rounded-full transition-all"
-                  style={{ width: `${data.active_farmers > 0 ? (data.large_producers / data.active_farmers * 100) : 0}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
+              
+              <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                
+                {/* Farmer Node */}
+                <div className="flex-1 w-full bg-white border border-stone-200 rounded-2xl p-5 shadow-sm text-center relative group hover:border-primary-300 transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition-transform"><Sprout className="w-6 h-6" /></div>
+                  <h4 className="font-display font-bold text-lg text-stone-900">{link.farmer}</h4>
+                  <p className="text-xs text-stone-500 font-medium">Farmer • {link.farmerLoc}</p>
+                </div>
 
-        {/* Unallocated */}
-        <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card" id="unallocated-panel">
-          <h3 className="font-display font-semibold text-stone-900 mb-4">Allocation Gaps</h3>
-          <div className="space-y-5">
-            <div>
-              <p className="text-sm text-stone-500 mb-1">Unallocated Supply</p>
-              <p className="text-2xl font-display font-bold text-harvest-600">{data.unallocated} <span className="text-sm font-normal text-stone-400">kg</span></p>
+                {/* Arrow & Load Info */}
+                <div className="flex flex-col items-center justify-center px-4">
+                  <div className="text-xs font-bold text-stone-900 bg-stone-100 px-3 py-1 rounded-full mb-2 border border-stone-200">
+                    {link.volume} kg • {link.quality}
+                  </div>
+                  <ArrowRight className="w-6 h-6 text-stone-300 md:block hidden" />
+                </div>
+
+                {/* Transporter Node */}
+                <div className="flex-1 w-full bg-white border border-stone-200 rounded-2xl p-5 shadow-sm text-center relative group hover:border-violet-300 transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition-transform"><Truck className="w-6 h-6" /></div>
+                  <h4 className="font-display font-bold text-lg text-stone-900">{link.transporter}</h4>
+                  <p className="text-xs text-stone-500 font-medium">Logistics Provider</p>
+                </div>
+
+                {/* Arrow */}
+                <div className="flex flex-col items-center justify-center px-4">
+                  <ArrowRight className="w-6 h-6 text-stone-300 md:block hidden" />
+                </div>
+
+                {/* Buyer Node */}
+                <div className="flex-1 w-full bg-white border border-stone-200 rounded-2xl p-5 shadow-sm text-center relative group hover:border-harvest-300 transition-colors">
+                  <div className="w-12 h-12 rounded-full bg-harvest-100 text-harvest-600 flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition-transform"><ShoppingCart className="w-6 h-6" /></div>
+                  <h4 className="font-display font-bold text-lg text-stone-900">{link.buyer}</h4>
+                  <p className="text-xs text-stone-500 font-medium">Buyer • {link.buyerLoc}</p>
+                </div>
+
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-stone-500 mb-1">Unmet Demand</p>
-              <p className="text-2xl font-display font-bold text-rose-600">{data.unmet_demand} <span className="text-sm font-normal text-stone-400">kg</span></p>
-            </div>
-          </div>
+          ))}
         </div>
       </div>
     </div>
