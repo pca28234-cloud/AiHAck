@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
 
+from datetime import datetime
 from app.database import get_db
-from app.models.models import Farmer, Harvest
+from app.models.models import Farmer, Harvest, Notification
+from app.websocket.manager import manager
 from app.schemas.schemas import (
     FarmerCreate, FarmerResponse,
     HarvestCreate, HarvestUpdate, HarvestResponse,
@@ -49,6 +51,44 @@ async def create_harvest(harvest: HarvestCreate, db: AsyncSession = Depends(get_
     db.add(db_harvest)
     await db.flush()
     await db.refresh(db_harvest)
+
+    # Real-time WebSocket broadcast to all (buyers, admin, etc.)
+    harvest_dict = {
+        "id": db_harvest.id,
+        "farmer_id": db_harvest.farmer_id,
+        "farmer_name": farmer.name,
+        "farmer_username": getattr(farmer, "username", "farmer1"),
+        "farmer_location": farmer.location,
+        "crop": db_harvest.crop,
+        "quantity": db_harvest.estimated_quantity,
+        "quality_grade": db_harvest.quality_grade,
+        "harvest_date": db_harvest.harvest_date,
+        "available_date": db_harvest.available_date,
+        "location": db_harvest.location or farmer.location,
+        "expected_price": db_harvest.expected_price,
+        "status": db_harvest.status,
+    }
+    await manager.broadcast_to_all("harvest_created", harvest_dict)
+
+    # Save notifications for buyers and admin
+    now_str = datetime.now().isoformat(timespec="seconds")
+    notif_buyer = Notification(
+        role="buyer",
+        event="harvest_created",
+        title="🌾 New Available Harvest",
+        message=f"{farmer.name} added {db_harvest.estimated_quantity} of Grade {db_harvest.quality_grade} {db_harvest.crop}.",
+        created_at=now_str,
+    )
+    notif_admin = Notification(
+        role="admin",
+        event="harvest_created",
+        title="🌾 Harvest Registered",
+        message=f"{farmer.name} added {db_harvest.estimated_quantity} {db_harvest.crop}.",
+        created_at=now_str,
+    )
+    db.add(notif_buyer)
+    db.add(notif_admin)
+    await db.flush()
 
     return HarvestResponse(
         id=db_harvest.id,
@@ -120,6 +160,17 @@ async def update_harvest(
     await db.refresh(harvest)
 
     farmer = await db.get(Farmer, harvest.farmer_id)
+
+    # Real-time WebSocket broadcast to all
+    await manager.broadcast_to_all("harvest_updated", {
+        "id": harvest.id,
+        "farmer_id": harvest.farmer_id,
+        "farmer_name": farmer.name if farmer else None,
+        "crop": harvest.crop,
+        "quantity": harvest.available_quantity,
+        "quality_grade": harvest.quality_grade,
+        "status": harvest.status,
+    })
 
     return HarvestResponse(
         id=harvest.id,

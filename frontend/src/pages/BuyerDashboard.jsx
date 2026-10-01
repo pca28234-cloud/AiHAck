@@ -40,7 +40,7 @@ export default function BuyerDashboard() {
   const [aiMessages, setAiMessages] = useState([
     {
       role: 'ai',
-      text: "👋 Hello! I'm your AI Procurement Assistant.\n\nTell me what produce and quantity you need — for example:\n• \"I want 500 kg Grade A tomatoes for tomorrow\"\n• \"Looking for 1000 kg Grade B produce\"\n\nI'll find the best matching farmer harvests and help you request them instantly!"
+      text: "👋 Hello! I'm your AI Procurement Assistant.\n\nTell me what produce and quantity you need — for example:\n• \"I want 500 Grade A tomatoes for tomorrow\"\n• \"Looking for 1000 Grade B produce\"\n\nI'll find the best matching farmer harvests and help you request them instantly!"
     }
   ]);
 
@@ -63,9 +63,22 @@ export default function BuyerDashboard() {
         getNotifications('buyer'),
       ]);
 
+      const savedUserStr = localStorage.getItem('user');
+      let savedUser = null;
+      try {
+        savedUser = savedUserStr ? JSON.parse(savedUserStr) : null;
+      } catch (e) {}
+
       let currentBuyer = null;
       if (bRes.status === 'fulfilled' && bRes.value.data?.length > 0) {
-        currentBuyer = bRes.value.data[0];
+        if (savedUser?.username) {
+          currentBuyer = bRes.value.data.find(
+            b => b.username === savedUser.username || b.id === savedUser.buyer_id
+          );
+        }
+        if (!currentBuyer) {
+          currentBuyer = bRes.value.data[0];
+        }
         setBuyer(currentBuyer);
       }
 
@@ -74,7 +87,7 @@ export default function BuyerDashboard() {
       }
 
       if (oRes.status === 'fulfilled' && oRes.value.data) {
-        setMyOrders(oRes.value.data.filter(o => !currentBuyer || o.buyer_name === currentBuyer.name));
+        setMyOrders(oRes.value.data.filter(o => !currentBuyer || o.buyer_id === currentBuyer.id || o.buyer_name === currentBuyer.name));
       }
 
       if (nRes.status === 'fulfilled' && nRes.value.data) {
@@ -92,19 +105,19 @@ export default function BuyerDashboard() {
   // WebSocket real-time updates
   const handleWsEvent = useCallback((event, data) => {
     console.log('[WS Buyer]', event, data);
-    if (event === 'harvest_created') {
-      setSuccess('🌾 New harvest available!');
+    if (event === 'harvest_created' || event === 'harvest_updated') {
+      setSuccess(`🌾 Available harvests updated in real time!`);
       loadData();
-    } else if (event === 'request_accepted') {
-      setSuccess(`✅ Your order #${data.order_id} was accepted! Transport is being arranged...`);
+    } else if (event === 'request_accepted' || event === 'order_accepted') {
+      setSuccess(`✅ Your order #${data.order_id} was accepted by the farmer!`);
       loadData();
     } else if (event === 'transport_allocated') {
       setSuccess(`🚛 Transport assigned for Order #${data.order_id}!`);
       setSelectedOrderId(data.order_id);
       setActiveTab('orders');
       loadData();
-    } else if (event === 'truck_status_updated') {
-      setSuccess(`Truck ${data.vehicle_number}: ${data.old_status} → ${data.new_status}`);
+    } else if (event === 'truck_status_updated' || event === 'order_status_updated') {
+      setSuccess(`🚛 Live Transport Status: ${data.display_status || data.new_status || data.status}`);
       loadData();
     } else if (event === 'notification') {
       setNotifications(prev => [data, ...prev]);
@@ -191,12 +204,12 @@ export default function BuyerDashboard() {
       setAiMatchOption(matchObj);
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        text: `🎯 **Found Matching Supply!**\n\n• **Farmer:** ${matchedHarvest.farmer_name}\n• **Crop:** ${matchedHarvest.crop} (Grade ${matchedHarvest.quality_grade})\n• **Available:** ${matchedHarvest.available_quantity || matchedHarvest.estimated_quantity} kg\n• **Location:** ${matchedHarvest.farmer_location}\n• **Price:** ₹${matchedHarvest.expected_price || 25}/kg\n\nWould you like to send a purchase request for **${qty} kg** to this farmer?`
+        text: `🎯 **Found Matching Supply!**\n\n• **Farmer:** ${matchedHarvest.farmer_name}\n• **Crop:** ${matchedHarvest.crop} (Grade ${matchedHarvest.quality_grade})\n• **Available:** ${matchedHarvest.available_quantity || matchedHarvest.estimated_quantity}\n• **Location:** ${matchedHarvest.farmer_location}\n• **Price:** ₹${matchedHarvest.expected_price || 25}\n\nWould you like to send a purchase request for **${qty}** to this farmer?`
       }]);
     } else {
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        text: `We currently have ${availableHarvests.length} active harvests listed. Tell me the quantity you need, for example:\n\n*"I want 500 kg Grade A tomatoes"*`
+        text: `We currently have ${availableHarvests.length} active harvests listed. Tell me the quantity you need, for example:\n\n*"I want 500 Grade A tomatoes"*`
       }]);
     }
     setAiLoading(false);
@@ -222,7 +235,7 @@ export default function BuyerDashboard() {
 
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        text: `🎉 **Purchase request sent!** ${aiMatchOption.harvest.farmer_name} has received your request for **${aiMatchOption.requested_qty} kg**. Once they accept, our AI Transport Agent will automatically allocate optimal trucks!`
+        text: `🎉 **Purchase request sent!** ${aiMatchOption.harvest.farmer_name} has received your request for **${aiMatchOption.requested_qty}**. Once they accept, our AI Transport Agent will automatically allocate optimal trucks!`
       }]);
       setAiMatchOption(null);
       setSuccess(`✅ Purchase request sent to ${aiMatchOption.harvest.farmer_name}!`);
@@ -414,7 +427,7 @@ export default function BuyerDashboard() {
                         <div className="space-y-1.5 text-xs text-stone-600 mb-4 bg-stone-50 rounded-xl p-3">
                           <div className="flex justify-between">
                             <span className="text-stone-400">Available:</span>
-                            <span className="font-bold text-stone-900">{h.available_quantity || h.estimated_quantity} kg</span>
+                            <span className="font-bold text-stone-900">{h.available_quantity || h.estimated_quantity}</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-stone-400">Location:</span>
@@ -427,7 +440,7 @@ export default function BuyerDashboard() {
                           {h.expected_price && (
                             <div className="flex justify-between text-harvest-700 font-bold">
                               <span>Price:</span>
-                              <span>₹{h.expected_price}/kg</span>
+                              <span>₹{h.expected_price}</span>
                             </div>
                           )}
                         </div>
@@ -482,7 +495,7 @@ export default function BuyerDashboard() {
                               }`}>{order.status?.replace('_', ' ')}</span>
                             </div>
                             <p className="text-sm text-stone-600">
-                              {order.quantity} kg Grade {order.quality_grade} {order.crop} · From <span className="font-semibold">{order.farmer_name || 'Farmer'}</span>
+                              {order.quantity} Grade {order.quality_grade} {order.crop} · From <span className="font-semibold">{order.farmer_name || 'Farmer'}</span>
                             </p>
                             {order.transport && (
                               <p className="text-xs text-violet-600 font-semibold mt-1">
@@ -588,15 +601,15 @@ export default function BuyerDashboard() {
             </div>
             {/* Available info */}
             <div className="bg-stone-50 rounded-xl p-4 mb-5 text-sm grid grid-cols-2 gap-2">
-              <div><p className="text-xs text-stone-400">Available</p><p className="font-bold text-stone-900">{showRequestForm.available_quantity || showRequestForm.estimated_quantity} kg</p></div>
+              <div><p className="text-xs text-stone-400">Available</p><p className="font-bold text-stone-900">{showRequestForm.available_quantity || showRequestForm.estimated_quantity}</p></div>
               <div><p className="text-xs text-stone-400">Grade</p><span className={`text-xs font-bold px-2 py-0.5 rounded-full ${gradeColor[showRequestForm.quality_grade] || 'bg-stone-100 text-stone-700'}`}>Grade {showRequestForm.quality_grade}</span></div>
               <div><p className="text-xs text-stone-400">Location</p><p className="font-semibold text-stone-700">{showRequestForm.farmer_location}</p></div>
-              {showRequestForm.expected_price && <div><p className="text-xs text-stone-400">Price</p><p className="font-bold text-stone-900">₹{showRequestForm.expected_price}/kg</p></div>}
+              {showRequestForm.expected_price && <div><p className="text-xs text-stone-400">Price</p><p className="font-bold text-stone-900">₹{showRequestForm.expected_price}</p></div>}
             </div>
             <form onSubmit={handleRequestProduce} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Quantity Required (kg)</label>
+                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Quantity Required</label>
                   <input type="number" min="1" max={showRequestForm.available_quantity || showRequestForm.estimated_quantity} required
                     value={requestForm.quantity} onChange={e => setRequestForm({ ...requestForm, quantity: e.target.value })}
                     className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30 focus:border-harvest-500"
@@ -702,7 +715,7 @@ export default function BuyerDashboard() {
                     onClick={handleAIRequestConfirm}
                     className="flex items-center gap-2 px-6 py-3 rounded-xl bg-harvest-600 text-white text-sm font-bold hover:bg-harvest-700 transition-colors shadow-md hover:-translate-y-0.5"
                   >
-                    <Check className="w-4 h-4" /> Send Request ({aiMatchOption.requested_qty} kg)
+                    <Check className="w-4 h-4" /> Send Request ({aiMatchOption.requested_qty})
                   </button>
                 </div>
               )}
@@ -716,7 +729,7 @@ export default function BuyerDashboard() {
                   onChange={e => setAiInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAISend()}
                   className="flex-1 px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500 outline-none text-sm"
-                  placeholder="e.g. I want 600 kg Grade A tomatoes for tomorrow..."
+                  placeholder="e.g. I want 600 Grade A tomatoes for tomorrow..."
                 />
                 <button
                   onClick={handleAISend}

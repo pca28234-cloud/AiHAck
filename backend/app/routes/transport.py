@@ -164,13 +164,14 @@ async def create_buyer_request(
         created_at=_now(),
     )
     db.add(br)
-    await db.flush()
+    await db.commit()
+    await db.refresh(br)
 
     # Notify farmer via WebSocket
     await _notify(
         db, "farmer", "buyer_request_created",
         "New Buyer Request",
-        f"{buyer.name} requested {quantity} kg Grade {quality_grade} — {harvest.crop}.",
+        f"{buyer.name} requested {quantity} Grade {quality_grade} — {harvest.crop}.",
         order_id=order.id,
     )
     await manager.broadcast_to_farmer("buyer_request_created", {
@@ -258,13 +259,14 @@ async def accept_order(order_id: int, db: AsyncSession = Depends(get_db)):
     await _notify(
         db, "buyer", "request_accepted",
         "Request Accepted! 🎉",
-        f"Your order #{order_id} for {order.quantity} kg Grade {order.quality_grade} has been accepted.",
+        f"Your order #{order_id} for {order.quantity} Grade {order.quality_grade} has been accepted.",
         order_id=order_id,
         user_id=order.buyer_id,
     )
 
     # Auto-trigger transport recommendation
     recommendation = await _run_transport_agent(order_id, db)
+    await db.commit()
 
     await manager.broadcast_to_farmer_and_buyer("request_accepted", {
         "order_id": order_id,
@@ -378,6 +380,7 @@ async def _run_transport_agent(order_id: int, db: AsyncSession) -> Optional[dict
 
     # Update order status
     order.status = "transport_allocated"
+    await db.commit()
 
     recommendation_data = {
         "recommendation_id": rec.id,
@@ -398,7 +401,7 @@ async def _run_transport_agent(order_id: int, db: AsyncSession) -> Optional[dict
     await _notify(
         db, "farmer", "transport_allocated",
         "🚛 Transport Allocated",
-        f"AI assigned {plan.trucks_count} truck(s) for order #{order_id}. Total capacity: {plan.total_capacity:.0f} kg. Cost: ₹{plan.total_cost:.0f}.",
+        f"AI assigned {plan.trucks_count} truck(s) for order #{order_id}. Total capacity: {plan.total_capacity:.0f}. Cost: ₹{plan.total_cost:.0f}.",
         order_id=order_id,
     )
     await _notify(
@@ -536,6 +539,8 @@ async def update_vehicle_status(
 
     old_status = vehicle.status
     vehicle.status = new_status
+    if new_status == "available":
+        vehicle.available_capacity = vehicle.capacity
 
     # Update linked TruckAllocations
     if new_status in ("picking_up", "in_transit", "delivered"):
@@ -564,6 +569,8 @@ async def update_vehicle_status(
                 vehicle.available_capacity = vehicle.capacity
                 vehicle.status = "available"
 
+    await db.commit()
+
     # Broadcast
     await manager.broadcast_to_farmer_and_buyer("truck_status_updated", {
         "vehicle_id": vehicle_id,
@@ -580,11 +587,184 @@ async def update_vehicle_status(
     }
 
 
+# ──────────────────── TRANSPORTER JOBS & STATUS ────────────────────
+
+@router.get("/transport/jobs")
+async def list_transporter_jobs(db: AsyncSession = Depends(get_db)):
+    """List all transport jobs for the transporter dashboard."""
+    result = await db.execute(
+        select(Order)
+        .where(Order.status.in_(["accepted", "transport_allocated", "pickup", "pickup_started", "picked_up", "in_transit", "delivered"]))
+        .order_by(Order.id.desc())
+    )
+    orders = result.scalars().all()
+    jobs = []
+    for order in orders:
+        buyer = await db.get(Buyer, order.buyer_id)
+        harvest = await db.get(Harvest, order.harvest_id) if order.harvest_id else None
+        farmer = await db.get(Farmer, harvest.farmer_id) if harvest else None
+
+        rec_result = await db.execute(
+            select(TransportRecommendation)
+            .where(TransportRecommendation.order_id == order.id)
+            .order_by(TransportRecommendation.id.desc())
+        )
+        rec = rec_result.scalars().first()
+        trucks = []
+        if rec:
+            ta_result = await db.execute(
+                select(TruckAllocation, Vehicle)
+                .join(Vehicle, TruckAllocation.vehicle_id == Vehicle.id)
+                .where(TruckAllocation.recommendation_id == rec.id)
+            )
+            for ta, v in ta_result.all():
+                trucks.append({
+                    "truck_id": v.id,
+                    "truck_number": v.vehicle_number,
+                    "assigned_capacity": ta.assigned_capacity,
+                    "capacity": v.capacity,
+                    "cost": ta.cost,
+                    "driver_name": v.driver_name,
+                    "driver_contact": v.driver_contact,
+                    "status": ta.status,
+                })
+
+        jobs.append({
+            "order_id": order.id,
+            "order_code": f"ORD{order.id:03d}",
+            "status": order.status,
+            "display_status": order.status.replace("_", " ").upper(),
+            "crop": harvest.crop if harvest else "Tomato",
+            "quantity": order.quantity,
+            "quality_grade": order.quality_grade,
+            "farmer": {
+                "name": farmer.name if farmer else "Farmer",
+                "username": getattr(farmer, "username", "farmer1"),
+                "farm_name": getattr(farmer, "farm_name", "Green Valley Farm"),
+                "pickup_location": farmer.location if farmer else (order.delivery_location or "Karnataka"),
+                "phone": farmer.phone if farmer else "9876543210",
+            },
+            "buyer": {
+                "name": buyer.name if buyer else "ABC Restaurant",
+                "delivery_location": order.delivery_location or (buyer.location if buyer else "Bangalore"),
+                "phone": buyer.phone if buyer else "9445566778",
+            },
+            "pickup_time": "Today, 08:00 AM",
+            "delivery_time": order.delivery_date,
+            "assigned_trucks": trucks,
+            "total_cost": rec.total_cost if rec else 0,
+            "total_capacity": rec.allocated_capacity if rec else 0,
+        })
+    return jobs
+
+
+@router.post("/transport/orders/{order_id}/update-status")
+async def update_transport_order_status(
+    order_id: int,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Transporter updates job status:
+    ASSIGNED, PICKUP STARTED, PICKED UP, IN TRANSIT, DELIVERED
+    Saves to DB, updates trucks, broadcasts to farmer, buyer, transporter, and admin.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    raw_status = data.get("status", "").strip()
+    status_map = {
+        "assigned": "transport_allocated",
+        "pickup started": "pickup_started",
+        "pickup_started": "pickup_started",
+        "picking_up": "pickup_started",
+        "pickup": "pickup_started",
+        "picked up": "picked_up",
+        "picked_up": "picked_up",
+        "in transit": "in_transit",
+        "in_transit": "in_transit",
+        "delivered": "delivered",
+    }
+    normalized = status_map.get(raw_status.lower(), raw_status.lower().replace(" ", "_"))
+    display_title = raw_status.title()
+
+    order.status = normalized
+
+    # Update linked truck allocations & vehicles
+    rec_result = await db.execute(
+        select(TransportRecommendation).where(TransportRecommendation.order_id == order_id)
+    )
+    rec = rec_result.scalars().first()
+    if rec:
+        ta_result = await db.execute(
+            select(TruckAllocation).where(TruckAllocation.recommendation_id == rec.id)
+        )
+        for ta in ta_result.scalars().all():
+            ta.status = normalized
+            v = await db.get(Vehicle, ta.vehicle_id)
+            if v:
+                if normalized == "delivered":
+                    v.status = "available"
+                    v.available_capacity = v.capacity
+                else:
+                    v.status = normalized
+
+    await db.commit()
+
+    # Fetch participants for notification
+    buyer = await db.get(Buyer, order.buyer_id)
+    harvest = await db.get(Harvest, order.harvest_id) if order.harvest_id else None
+    farmer = await db.get(Farmer, harvest.farmer_id) if harvest else None
+
+    # Broadcast real-time event to all connected dashboards
+    payload = {
+        "order_id": order.id,
+        "order_code": f"ORD{order.id:03d}",
+        "status": normalized,
+        "display_status": raw_status.upper(),
+        "timestamp": _now(),
+    }
+    await manager.broadcast_to_all("truck_status_updated", payload)
+    await manager.broadcast_to_all("order_status_updated", payload)
+
+    # Add DB notifications for farmer and buyer
+    if farmer:
+        await _notify(
+            db, "farmer", "truck_status_updated",
+            f"🚛 Transport Update: {display_title}",
+            f"Order #ORD{order.id:03d} transport status changed to {raw_status.upper()}.",
+            order_id=order.id,
+            user_id=farmer.id,
+        )
+    if buyer:
+        await _notify(
+            db, "buyer", "truck_status_updated",
+            f"🚛 Delivery Update: {display_title}",
+            f"Order #ORD{order.id:03d} transport status changed to {raw_status.upper()}.",
+            order_id=order.id,
+            user_id=buyer.id,
+        )
+    await _notify(
+        db, "admin", "truck_status_updated",
+        f"Order #ORD{order.id:03d} {raw_status.upper()}",
+        f"Transport status updated for Order #{order.id} to {raw_status.upper()}.",
+        order_id=order.id,
+    )
+
+    return {
+        "order_id": order.id,
+        "status": normalized,
+        "display_status": raw_status.upper(),
+        "message": f"Transport status successfully updated to {raw_status.upper()}",
+    }
+
+
 # ──────────────────── ORDERS (full detail) ────────────────────
 
 @router.get("/orders/{order_id}/detail")
 async def get_order_detail(order_id: int, db: AsyncSession = Depends(get_db)):
-    """Get a full order with buyer, harvest, farmer, and transport details."""
+    """Get a full connected order with farmer, buyer, transporter, transport details, and timeline."""
     order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -601,6 +781,7 @@ async def get_order_detail(order_id: int, db: AsyncSession = Depends(get_db)):
     )
     rec = rec_result.scalars().first()
     transport = None
+    trucks = []
     if rec:
         ta_result = await db.execute(
             select(TruckAllocation, Vehicle)
@@ -611,6 +792,7 @@ async def get_order_detail(order_id: int, db: AsyncSession = Depends(get_db)):
             {
                 "vehicle_id": v.id,
                 "vehicle_number": v.vehicle_number,
+                "capacity": v.capacity,
                 "assigned_capacity": ta.assigned_capacity,
                 "cost": ta.cost,
                 "status": ta.status,
@@ -625,24 +807,67 @@ async def get_order_detail(order_id: int, db: AsyncSession = Depends(get_db)):
             "allocated_capacity": rec.allocated_capacity,
             "trucks_count": rec.trucks_count,
             "reason": rec.reason,
+            "allocation_time": rec.created_at,
             "trucks": trucks,
         }
 
+    # Timeline calculation
+    st = order.status
+    stages = [
+        {"name": "Harvest Added", "done": True, "active": False},
+        {"name": "Buyer Request Created", "done": True, "active": False},
+        {"name": "Farmer Accepted", "done": st in ["accepted", "transport_allocated", "pickup", "pickup_started", "picked_up", "in_transit", "delivered"], "active": st == "accepted"},
+        {"name": "AI Transport Recommended", "done": st in ["transport_allocated", "pickup", "pickup_started", "picked_up", "in_transit", "delivered"], "active": False},
+        {"name": "Transport Allocated", "done": st in ["transport_allocated", "pickup", "pickup_started", "picked_up", "in_transit", "delivered"], "active": st == "transport_allocated"},
+        {"name": "Pickup Started", "done": st in ["pickup_started", "picked_up", "in_transit", "delivered"], "active": st in ["pickup", "pickup_started"]},
+        {"name": "In Transit", "done": st in ["picked_up", "in_transit", "delivered"], "active": st in ["picked_up", "in_transit"]},
+        {"name": "Delivered", "done": st == "delivered", "active": st == "delivered"},
+    ]
+
     return {
         "id": order.id,
+        "order_code": f"ORD{order.id:03d}",
         "status": order.status,
+        "display_status": order.status.replace("_", " ").upper(),
         "quantity": order.quantity,
         "quality_grade": order.quality_grade,
         "delivery_date": order.delivery_date,
-        "delivery_location": order.delivery_location,
-        "buyer": {"id": buyer.id, "name": buyer.name, "location": buyer.location} if buyer else None,
+        "delivery_location": order.delivery_location or (buyer.location if buyer else ""),
+        "farmer": {
+            "id": farmer.id if farmer else None,
+            "username": getattr(farmer, "username", "farmer1"),
+            "name": farmer.name if farmer else "Farmer",
+            "farm_name": getattr(farmer, "farm_name", "Farm"),
+            "location": farmer.location if farmer else "",
+            "contact": farmer.phone if farmer else "",
+            "harvest_quantity": harvest.estimated_quantity if harvest else order.quantity,
+            "quality": harvest.quality_grade if harvest else order.quality_grade,
+            "harvest_date": harvest.harvest_date if harvest else order.delivery_date,
+        },
+        "buyer": {
+            "id": buyer.id if buyer else None,
+            "username": getattr(buyer, "username", "buyer1"),
+            "name": buyer.name if buyer else "ABC Restaurant",
+            "contact": buyer.contact or (buyer.phone if buyer else ""),
+            "delivery_location": order.delivery_location or (buyer.location if buyer else ""),
+            "requested_quantity": order.quantity,
+            "order_date": order.delivery_date,
+        },
+        "transporter": {
+            "name": "Raj Transport Services",
+            "contact": "Rajesh Singh (9822098765)",
+            "vehicle_details": f"{len(trucks)} Truck(s) Assigned",
+            "assigned_trucks": [t["vehicle_number"] for t in trucks],
+            "pickup_time": "Today, 08:00 AM",
+            "delivery_time": order.delivery_date,
+        },
         "harvest": {
-            "id": harvest.id,
-            "crop": harvest.crop,
-            "quality_grade": harvest.quality_grade,
-        } if harvest else None,
-        "farmer": {"id": farmer.id, "name": farmer.name, "location": farmer.location} if farmer else None,
+            "id": harvest.id if harvest else None,
+            "crop": harvest.crop if harvest else "Tomato",
+            "quality_grade": harvest.quality_grade if harvest else order.quality_grade,
+        },
         "transport": transport,
+        "timeline": stages,
     }
 
 
@@ -691,12 +916,20 @@ async def list_orders_extended(db: AsyncSession = Depends(get_db)):
 
         out.append({
             "id": order.id,
+            "order_code": f"ORD{order.id:03d}",
             "status": order.status,
+            "display_status": order.status.replace("_", " ").upper(),
             "quantity": order.quantity,
             "quality_grade": order.quality_grade,
             "delivery_date": order.delivery_date,
-            "buyer_name": buyer.name if buyer else None,
-            "farmer_name": farmer.name if farmer else None,
+            "delivery_location": order.delivery_location or (buyer.location if buyer else ""),
+            "buyer_id": order.buyer_id,
+            "buyer_name": buyer.name if buyer else "ABC Restaurant",
+            "farmer_id": farmer.id if farmer else None,
+            "farmer_name": farmer.name if farmer else "Farmer",
+            "farmer_username": getattr(farmer, "username", "farmer1"),
+            "farmer_location": farmer.location if farmer else "",
+            "transporter_name": "Raj Transport Services",
             "crop": harvest.crop if harvest else "Tomato",
             "transport": transport_summary,
         })

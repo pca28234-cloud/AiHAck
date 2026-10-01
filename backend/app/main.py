@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.database import engine, Base, init_db
-from app.routes import farmers, buyers, vehicles, ai, dashboard
+from app.routes import farmers, buyers, vehicles, ai, dashboard, auth
 from app.routes import transport
 from app.routes.transport import websocket_endpoint
 
@@ -33,6 +33,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── Authentication ──
+app.include_router(auth.router, prefix="/api", tags=["Authentication"])
 
 # ── Legacy routes (kept for backward compatibility) ──
 app.include_router(farmers.router, prefix="/api", tags=["Farmers & Harvests"])

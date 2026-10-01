@@ -171,12 +171,12 @@ def _make_plan(
     if is_exact:
         reason = (
             f"This combination of {len(combo)} truck(s) exactly satisfies the required "
-            f"{required_quantity:.0f} kg while minimizing the estimated transport cost of ₹{total_cost:.0f}."
+            f"{required_quantity:.0f} while minimizing the estimated transport cost of ₹{total_cost:.0f}."
         )
     else:
         reason = (
-            f"This combination of {len(combo)} truck(s) provides {total_cap:.0f} kg of capacity "
-            f"(+{unused:.0f} kg surplus) to fulfill the {required_quantity:.0f} kg requirement "
+            f"This combination of {len(combo)} truck(s) provides {total_cap:.0f} capacity "
+            f"(+{unused:.0f} surplus) to fulfill the {required_quantity:.0f} requirement "
             f"at an estimated cost of ₹{total_cost:.0f}. "
             f"No exact match was found with lower cost."
         )

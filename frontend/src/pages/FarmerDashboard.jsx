@@ -43,7 +43,7 @@ export default function FarmerDashboard() {
   const [aiMessages, setAiMessages] = useState([
     {
       role: 'ai',
-      text: "👋 Hello! I'm your AI Harvest Assistant.\n\nTell me what you've harvested in natural language — for example:\n• \"I harvested 500 kg of Grade A tomatoes ready tomorrow at 25 per kg\"\n• \"Add 1200 kg tomato grade B in Kolar\"\n\nI'll automatically parse and register your harvest!"
+      text: "👋 Hello! I'm your AI Harvest Assistant.\n\nTell me what you've harvested in natural language — for example:\n• \"I harvested 500 of Grade A tomatoes ready tomorrow at 25\"\n• \"Add 1200 tomato grade B in Kolar\"\n\nI'll automatically parse and register your harvest!"
     }
   ]);
 
@@ -69,22 +69,53 @@ export default function FarmerDashboard() {
         getNotifications('farmer'),
       ]);
 
+      const savedUserStr = localStorage.getItem('user');
+      let savedUser = null;
+      try {
+        savedUser = savedUserStr ? JSON.parse(savedUserStr) : null;
+      } catch (e) {}
+
       let currentFarmer = null;
       if (fRes.status === 'fulfilled' && fRes.value.data?.length > 0) {
-        currentFarmer = fRes.value.data[0];
+        if (savedUser?.username) {
+          currentFarmer = fRes.value.data.find(
+            f => f.username === savedUser.username || f.id === savedUser.farmer_id
+          );
+        }
+        if (!currentFarmer) {
+          currentFarmer = fRes.value.data[0];
+        }
         setFarmer(currentFarmer);
       }
 
+      const farmerId = currentFarmer?.id;
+
       if (hRes.status === 'fulfilled' && hRes.value.data) {
-        setHarvests(hRes.value.data);
+        // Only show this farmer's own harvests
+        const myHarvests = farmerId
+          ? hRes.value.data.filter(h => h.farmer_id === farmerId)
+          : hRes.value.data;
+        setHarvests(myHarvests);
       }
 
       if (brRes.status === 'fulfilled' && brRes.value.data) {
-        setRequests(brRes.value.data);
+        // Only show requests directed to this farmer
+        const myRequests = farmerId
+          ? brRes.value.data.filter(r => r.farmer_id === farmerId)
+          : brRes.value.data;
+        setRequests(myRequests);
       }
 
       if (oRes.status === 'fulfilled' && oRes.value.data) {
-        setOrders(oRes.value.data);
+        // Only show orders for this farmer
+        const myOrders = farmerId
+          ? oRes.value.data.filter(
+              o => o.farmer_id === farmerId ||
+                   o.farmer_username === currentFarmer?.username ||
+                   o.farmer_name === currentFarmer?.name
+            )
+          : oRes.value.data;
+        setOrders(myOrders);
       }
 
       if (nRes.status === 'fulfilled' && nRes.value.data) {
@@ -103,7 +134,7 @@ export default function FarmerDashboard() {
   const handleWsEvent = useCallback((event, data) => {
     console.log('[WS Farmer]', event, data);
     if (event === 'buyer_request_created') {
-      setSuccess(`📬 New buyer request received for ${data.quantity} kg!`);
+      setSuccess(`📬 New buyer request received for ${data.quantity}!`);
       loadData();
     } else if (event === 'transport_allocated') {
       setSuccess(`🚛 Transport allocated for Order #${data.order_id}`);
@@ -256,12 +287,12 @@ export default function FarmerDashboard() {
       setAiParsed(parsedData);
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        text: `✅ **Harvest Identified!**\n\n• **Crop:** ${parsedData.crop}\n• **Quantity:** ${parsedData.estimated_quantity} kg\n• **Quality:** Grade ${parsedData.quality_grade}\n• **Harvest Date:** ${parsedData.harvest_date}\n• **Price:** ₹${parsedData.expected_price || 'Market Rate'}/kg\n• **Location:** ${parsedData.location}\n\nWould you like me to register this harvest now? Click **"Confirm & Add Harvest"** below.`
+        text: `✅ **Harvest Identified!**\n\n• **Crop:** ${parsedData.crop}\n• **Quantity:** ${parsedData.estimated_quantity}\n• **Quality:** Grade ${parsedData.quality_grade}\n• **Harvest Date:** ${parsedData.harvest_date}\n• **Price:** ₹${parsedData.expected_price || 'Market Rate'}\n• **Location:** ${parsedData.location}\n\nWould you like me to register this harvest now? Click **"Confirm & Add Harvest"** below.`
       }]);
     } else {
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        text: `⚠️ I couldn't identify the quantity from your message. Please specify the quantity, e.g.:\n\n*"I have 500 kg of Grade A tomatoes ready for harvest tomorrow at ₹25/kg."*`
+        text: `⚠️ I couldn't identify the quantity from your message. Please specify the quantity, e.g.:\n\n*"I have 500 of Grade A tomatoes ready for harvest tomorrow at ₹25."*`
       }]);
     }
     setAiLoading(false);
@@ -284,10 +315,10 @@ export default function FarmerDashboard() {
       });
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        text: `🎉 **Logged successfully!** Added **${aiParsed.estimated_quantity} kg** of ${aiParsed.crop} (Grade ${aiParsed.quality_grade}) to your account. Buyers and transport can now connect with you in real time!`
+        text: `🎉 **Logged successfully!** Added **${aiParsed.estimated_quantity}** of ${aiParsed.crop} (Grade ${aiParsed.quality_grade}) to your account. Buyers and transport can now connect with you in real time!`
       }]);
       setAiParsed(null);
-      setSuccess(`✅ Added ${aiParsed.estimated_quantity} kg harvest via AI!`);
+      setSuccess(`✅ Added ${aiParsed.estimated_quantity} harvest via AI!`);
       await loadData();
     } catch (err) {
       console.error('Failed to log harvest via AI:', err);
@@ -342,55 +373,98 @@ export default function FarmerDashboard() {
         {success && <div className="mb-4 p-4 rounded-xl bg-primary-50 border border-primary-200 text-primary-800 text-sm flex items-center gap-3 shadow-sm animate-slide-up"><Check className="w-4 h-4" />{success}</div>}
         {error && <div className="mb-4 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center gap-3 shadow-sm animate-slide-up"><AlertTriangle className="w-4 h-4" />{error}</div>}
 
-        {/* Hero */}
-        <div className="bg-gradient-to-br from-stone-900 to-stone-800 rounded-2xl p-7 mb-6 text-white shadow-xl relative overflow-hidden">
+        {/* Hero & Account Details (Requirement 2) */}
+        <div className="bg-gradient-to-br from-stone-900 via-stone-850 to-stone-800 rounded-2xl p-7 mb-6 text-white shadow-xl relative overflow-hidden border border-stone-800">
           <div className="absolute top-0 right-0 opacity-5 pointer-events-none p-8">
-            <Sprout className="w-48 h-48" />
+            <Sprout className="w-56 h-56 text-primary-400" />
           </div>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 relative z-10">
             <div>
-              <p className="text-stone-400 text-sm mb-1">Welcome back,</p>
-              <h1 className="font-bold text-2xl sm:text-3xl text-white">{farmer?.name?.split('—')[1]?.trim() || farmer?.name || 'Farmer'}</h1>
-              <div className="flex flex-wrap gap-4 mt-2 text-stone-300 text-sm">
-                <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-primary-400" />{farmer?.location || 'Kolar'}</span>
-                <span className="flex items-center gap-1.5"><Ruler className="w-3.5 h-3.5 text-primary-400" />{farmer?.farm_size || 4.2} ha</span>
-                {pendingRequests.length > 0 && (
-                  <span className="flex items-center gap-1.5 bg-rose-500/20 text-rose-300 px-2 py-0.5 rounded-full text-xs font-bold">
-                    🔔 {pendingRequests.length} pending request{pendingRequests.length > 1 ? 's' : ''}
-                  </span>
-                )}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-primary-500/20 text-primary-300 border border-primary-500/30 flex items-center gap-1.5">
+                  <Shield className="w-3 h-3 text-primary-400" /> Role: Farmer
+                </span>
+                <span className="text-xs font-mono text-stone-400 bg-white/5 px-2 py-0.5 rounded-md">
+                  Username: {farmer?.username || 'farmer1'}
+                </span>
+              </div>
+              <h1 className="font-bold text-2xl sm:text-3xl text-white tracking-tight">
+                Welcome, {farmer?.username || 'farmer1'}
+              </h1>
+              <p className="text-primary-300 font-semibold text-base mt-0.5">
+                {farmer?.name} — {farmer?.farm_name || 'Farm'}
+              </p>
+
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 mt-4 text-xs text-stone-300 border-t border-white/10 pt-3">
+                <div className="flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-primary-400 shrink-0" />
+                  <span><strong>Farm Location:</strong> {farmer?.location}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Ruler className="w-3.5 h-3.5 text-primary-400 shrink-0" />
+                  <span><strong>Farm Details:</strong> {farmer?.farm_size} ha ({farmer?.producer_type === 'small' ? 'Smallholder' : 'Commercial'}) • Primary Crop: {farmer?.crop || 'Tomato'}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Phone className="w-3.5 h-3.5 text-primary-400 shrink-0" />
+                  <span><strong>Contact:</strong> {farmer?.phone || 'N/A'}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-primary-400 shrink-0" />
+                  <span><strong>Email:</strong> {farmer?.email || 'N/A'}</span>
+                </div>
               </div>
             </div>
-            
+
             {/* AI Assistant + Manual Add Harvest Buttons */}
-            <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-3 flex-wrap lg:flex-nowrap shrink-0">
               <button
                 onClick={() => setShowAIChat(true)}
-                className="flex items-center gap-2 px-5 py-3.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold transition-all shadow-lg shadow-violet-600/30 hover:-translate-y-0.5"
+                className="flex items-center gap-2 px-5 py-3.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold transition-all shadow-lg shadow-violet-600/30 hover:-translate-y-0.5 text-sm"
                 title="Log harvest using natural language AI"
               >
-                <Bot className="w-5 h-5 text-violet-200" /> AI Assistant
+                <Bot className="w-4 h-4 text-violet-200" /> AI Assistant
               </button>
               <button
                 onClick={() => setShowHarvestForm(true)}
-                className="flex items-center gap-2 px-6 py-3.5 rounded-xl bg-primary-500 hover:bg-primary-400 text-white font-bold transition-all shadow-lg shadow-primary-500/30 hover:-translate-y-0.5"
+                className="flex items-center gap-2 px-6 py-3.5 rounded-xl bg-primary-500 hover:bg-primary-400 text-white font-bold transition-all shadow-lg shadow-primary-500/30 hover:-translate-y-0.5 text-sm"
               >
-                <Plus className="w-5 h-5" /> Add Harvest
+                <Plus className="w-4 h-4" /> Add Harvest
               </button>
             </div>
           </div>
 
-          {/* Quick stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+          {/* Core Metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 border-t border-white/10 pt-4">
             {[
-              { label: 'My Harvests', value: harvests.length, color: 'text-primary-400' },
-              { label: 'Pending Requests', value: pendingRequests.length, color: 'text-rose-400' },
-              { label: 'Active Orders', value: orders.filter(o => !['delivered','rejected'].includes(o.status)).length, color: 'text-amber-400' },
-              { label: 'Notifications', value: unreadCount, color: 'text-sky-400' },
+              {
+                label: 'Available Harvest',
+                value: `${harvests.reduce((sum, h) => sum + (h.sorted_quantity || h.estimated_quantity || 0), 0)}`,
+                sub: `${harvests.length} lots listed`,
+                color: 'text-primary-400',
+              },
+              {
+                label: 'Buyer Requests',
+                value: pendingRequests.length,
+                sub: 'pending review',
+                color: 'text-rose-400',
+              },
+              {
+                label: 'Active Orders',
+                value: orders.filter(o => !['delivered', 'rejected'].includes(o.status)).length,
+                sub: 'in coordination',
+                color: 'text-amber-400',
+              },
+              {
+                label: 'Transport Allocations',
+                value: orders.filter(o => o.transport && o.status !== 'rejected').length,
+                sub: 'optimized trucks',
+                color: 'text-violet-400',
+              },
             ].map(s => (
-              <div key={s.label} className="bg-white/10 rounded-xl p-3">
+              <div key={s.label} className="bg-white/5 rounded-xl p-3 border border-white/5">
                 <p className={`font-bold text-xl ${s.color}`}>{s.value}</p>
-                <p className="text-stone-400 text-xs mt-0.5">{s.label}</p>
+                <p className="text-white text-xs font-semibold mt-0.5">{s.label}</p>
+                <p className="text-stone-400 text-[11px]">{s.sub}</p>
               </div>
             ))}
           </div>
@@ -460,7 +534,7 @@ export default function FarmerDashboard() {
                               </div>
                               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-stone-600 mt-2">
                                 <span className="flex items-center gap-1.5"><Package className="w-3.5 h-3.5 text-stone-400" />{r.crop}</span>
-                                <span className="flex items-center gap-1.5"><Activity className="w-3.5 h-3.5 text-stone-400" />{r.quantity} kg</span>
+                                <span className="flex items-center gap-1.5"><Activity className="w-3.5 h-3.5 text-stone-400" />{r.quantity}</span>
                                 <span className="flex items-center gap-1.5"><BarChart3 className="w-3.5 h-3.5 text-stone-400" />Grade {r.quality_grade}</span>
                                 <span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5 text-stone-400" />By {r.delivery_date}</span>
                               </div>
@@ -561,7 +635,7 @@ export default function FarmerDashboard() {
                           <th className="px-6 py-3">Quantity</th>
                           <th className="px-6 py-3">Grade</th>
                           <th className="px-6 py-3">Date</th>
-                          <th className="px-6 py-3">Price/kg</th>
+                          <th className="px-6 py-3">Price (₹)</th>
                           <th className="px-6 py-3">Status</th>
                         </tr>
                       </thead>
@@ -570,14 +644,14 @@ export default function FarmerDashboard() {
                           <tr key={h.id} className="hover:bg-stone-50/50">
                             <td className="px-6 py-4 font-semibold text-stone-900">{h.crop}</td>
                             <td className="px-6 py-4 font-bold text-stone-900">
-                              {h.sorted_quantity || h.estimated_quantity} <span className="font-normal text-stone-400 text-xs">kg</span>
+                              {h.sorted_quantity || h.estimated_quantity}
                             </td>
                             <td className="px-6 py-4">
                               <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${gradeColor[h.quality_grade] || 'bg-stone-100 text-stone-700'}`}>Grade {h.quality_grade}</span>
                             </td>
                             <td className="px-6 py-4 text-stone-600">{h.harvest_date}</td>
                             <td className="px-6 py-4 text-stone-600">
-                              {h.expected_price ? `₹${h.expected_price}/kg` : '—'}
+                              {h.expected_price ? `₹${h.expected_price}` : '—'}
                             </td>
                             <td className="px-6 py-4">
                               <span className={`px-2 py-0.5 rounded-full text-xs font-bold capitalize ${
@@ -625,7 +699,7 @@ export default function FarmerDashboard() {
                               }`}>{order.status?.replace('_', ' ')}</span>
                             </div>
                             <p className="text-sm text-stone-600">
-                              <span className="font-semibold">{order.buyer_name}</span> — {order.quantity} kg Grade {order.quality_grade} {order.crop}
+                              <span className="font-semibold">{order.buyer_name}</span> — {order.quantity} Grade {order.quality_grade} {order.crop}
                             </p>
                             {order.transport && (
                               <p className="text-xs text-violet-600 font-semibold mt-1">
@@ -724,7 +798,7 @@ export default function FarmerDashboard() {
                   return (
                     <div key={g} className="flex items-center justify-between">
                       <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${gradeColor[g]}`}>Grade {g}</span>
-                      <span className="text-sm font-bold text-stone-900">{total} kg</span>
+                      <span className="text-sm font-bold text-stone-900">{total}</span>
                     </div>
                   );
                 })}
@@ -753,7 +827,7 @@ export default function FarmerDashboard() {
                     className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Quantity (kg)</label>
+                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Quantity</label>
                   <input type="number" step="0.1" min="1" required value={harvestForm.estimated_quantity} onChange={e => setHarvestForm({ ...harvestForm, estimated_quantity: e.target.value })}
                     className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500"
                     placeholder="e.g. 1500" />
@@ -768,7 +842,7 @@ export default function FarmerDashboard() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Price per kg (₹)</label>
+                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Price (₹)</label>
                   <input type="number" step="0.5" min="1" value={harvestForm.expected_price} onChange={e => setHarvestForm({ ...harvestForm, expected_price: e.target.value })}
                     className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30"
                     placeholder="e.g. 25" />
@@ -793,10 +867,10 @@ export default function FarmerDashboard() {
               <button
                 type="submit"
                 disabled={submittingHarvest}
-                className="w-full py-3.5 rounded-xl bg-primary-600 text-white font-bold text-base hover:bg-primary-700 transition-colors shadow-lg mt-2 flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full py-4 rounded-xl bg-primary-600 text-white font-bold text-base hover:bg-primary-700 transition-colors shadow-lg mt-3 flex items-center justify-center gap-2 disabled:opacity-50 tracking-wider uppercase"
               >
                 {submittingHarvest ? <Loader className="w-5 h-5 animate-spin" /> : <Plus className="w-5 h-5" />}
-                {submittingHarvest ? 'Adding Harvest...' : 'Submit Harvest'}
+                {submittingHarvest ? 'SAVING TO DATABASE...' : 'ADD HARVEST'}
               </button>
             </form>
           </div>
@@ -871,7 +945,7 @@ export default function FarmerDashboard() {
                   onChange={e => setAiInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAISend()}
                   className="flex-1 px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500 outline-none text-sm"
-                  placeholder="e.g. I have 400 kg Grade A tomatoes for tomorrow at ₹25/kg..."
+                  placeholder="e.g. I have 400 Grade A tomatoes for tomorrow at ₹25..."
                 />
                 <button
                   onClick={handleAISend}

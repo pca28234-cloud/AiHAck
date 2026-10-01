@@ -8,14 +8,34 @@ from sqlalchemy.sql import func
 from app.database import Base
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False)  # farmer, buyer, transporter, admin
+    farmer_id = Column(Integer, ForeignKey("farmers.id"), nullable=True)
+    buyer_id = Column(Integer, ForeignKey("buyers.id"), nullable=True)
+    vehicle_id = Column(Integer, ForeignKey("vehicles.id"), nullable=True)
+    full_name = Column(String(100), nullable=True)
+    created_at = Column(String(30), nullable=True)
+
+    def __repr__(self):
+        return f"<User {self.username} ({self.role})>"
+
+
 class Farmer(Base):
     __tablename__ = "farmers"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), nullable=True, index=True)
     name = Column(String(100), nullable=False)
+    farm_name = Column(String(100), nullable=True)
     location = Column(String(200), nullable=False)
     farm_size = Column(Float, nullable=False)
     producer_type = Column(String(10), nullable=False)
+    crop = Column(String(50), default="Tomato")
     pan_card = Column(String(10), nullable=True)
     land_location = Column(String(300), nullable=True)
     phone = Column(String(15), nullable=True)
@@ -59,6 +79,7 @@ class Buyer(Base):
     __tablename__ = "buyers"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(50), nullable=True, index=True)
     name = Column(String(100), nullable=False)
     location = Column(String(200), nullable=False)
     contact = Column(String(100), nullable=True)
@@ -128,6 +149,8 @@ class Vehicle(Base):
     cost_per_trip = Column(Float, nullable=True)   # INR per trip
     driver_name = Column(String(100), nullable=True)
     driver_contact = Column(String(20), nullable=True)
+    transporter_name = Column(String(100), default="Raj Transport Services")
+    username = Column(String(50), nullable=True, index=True)
     current_location = Column(String(200), nullable=True)
     status = Column(String(20), default="available")  # available, assigned, picking_up, in_transit, delivered, unavailable
 

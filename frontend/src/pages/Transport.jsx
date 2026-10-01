@@ -79,11 +79,11 @@ export default function Transport() {
       <div className="grid md:grid-cols-3 gap-4 mb-8">
         <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card">
           <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-1">Total Capacity</p>
-          <p className="text-2xl font-display font-bold text-stone-900">{totalCapacity} <span className="text-sm font-normal text-stone-400">kg</span></p>
+          <p className="text-2xl font-display font-bold text-stone-900">{totalCapacity}</p>
         </div>
         <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card">
           <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-1">Available</p>
-          <p className="text-2xl font-display font-bold text-primary-700">{totalAvailable} <span className="text-sm font-normal text-stone-400">kg</span></p>
+          <p className="text-2xl font-display font-bold text-primary-700">{totalAvailable}</p>
         </div>
         <div className="bg-white rounded-xl border border-stone-200 p-6 shadow-card">
           <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mb-1">Utilization</p>
@@ -109,11 +109,11 @@ export default function Transport() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Total Capacity (kg)</label>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Total Capacity</label>
                   <input type="number" step="0.1" min="1" required value={form.capacity} onChange={(e) => setForm({...form, capacity: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Available Capacity (kg)</label>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Available Capacity</label>
                   <input type="number" step="0.1" min="0" value={form.available_capacity} onChange={(e) => setForm({...form, available_capacity: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500" placeholder="Same as capacity" />
                 </div>
               </div>
@@ -154,11 +154,11 @@ export default function Transport() {
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-stone-500">Capacity</span>
-                    <span className="font-medium text-stone-900">{v.capacity} kg</span>
+                    <span className="font-medium text-stone-900">{v.capacity}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-stone-500">Available</span>
-                    <span className="font-medium text-primary-700">{v.available_capacity} kg</span>
+                    <span className="font-medium text-primary-700">{v.available_capacity}</span>
                   </div>
                   <div className="w-full bg-stone-100 rounded-full h-2.5 mt-2">
                     <div className={`h-2.5 rounded-full transition-all ${pct > 80 ? 'bg-rose-500' : pct > 50 ? 'bg-harvest-500' : 'bg-primary-500'}`} style={{ width: `${pct}%` }} />

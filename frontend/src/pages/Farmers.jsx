@@ -166,8 +166,8 @@ export default function Farmers() {
               <div className="mb-4 p-4 rounded-xl bg-primary-50 border border-primary-100">
                 <p className="text-sm font-semibold text-primary-800 mb-2">Parsed Result:</p>
                 <div className="text-sm text-primary-700 space-y-1">
-                  <p>Estimated: {nlResult.parsed.estimated_quantity} kg</p>
-                  {nlResult.parsed.expected_sorted_quantity && <p>After sorting: {nlResult.parsed.expected_sorted_quantity} kg</p>}
+                  <p>Estimated: {nlResult.parsed.estimated_quantity}</p>
+                  {nlResult.parsed.expected_sorted_quantity && <p>After sorting: {nlResult.parsed.expected_sorted_quantity}</p>}
                   <p>Quality: Grade {nlResult.parsed.quality_grade}</p>
                   {nlResult.parsed.availability && <p>Available: {nlResult.parsed.availability}</p>}
                 </div>
@@ -238,11 +238,11 @@ export default function Farmers() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Estimated Qty (kg)</label>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Estimated Qty</label>
                   <input type="number" step="0.1" min="0.1" required value={harvestForm.estimated_quantity} onChange={(e) => setHarvestForm({...harvestForm, estimated_quantity: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Sorted Qty (kg)</label>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Sorted Qty</label>
                   <input type="number" step="0.1" min="0" value={harvestForm.sorted_quantity} onChange={(e) => setHarvestForm({...harvestForm, sorted_quantity: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500" placeholder="Optional" />
                 </div>
               </div>
@@ -371,10 +371,10 @@ export default function Farmers() {
                         {h.producer_type}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right text-stone-700">{h.estimated_quantity} kg</td>
+                    <td className="px-6 py-4 text-right text-stone-700">{h.estimated_quantity}</td>
                     <td className="px-6 py-4 text-right">
                       {h.sorted_quantity != null ? (
-                        <span className="text-primary-700 font-medium">{h.sorted_quantity} kg</span>
+                        <span className="text-primary-700 font-medium">{h.sorted_quantity}</span>
                       ) : (
                         <span className="text-stone-400">—</span>
                       )}

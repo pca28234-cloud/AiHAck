@@ -18,6 +18,7 @@ class ConnectionManager:
         self.connections: Dict[str, List[WebSocket]] = {
             "farmer": [],
             "buyer": [],
+            "transporter": [],
             "admin": [],
             "all": [],
         }
@@ -69,6 +70,9 @@ class ConnectionManager:
 
     async def broadcast_to_buyer(self, event: str, data: Dict[str, Any]):
         await self.broadcast(event, data, roles=["buyer"])
+
+    async def broadcast_to_transporter(self, event: str, data: Dict[str, Any]):
+        await self.broadcast(event, data, roles=["transporter"])
 
     async def broadcast_to_farmer_and_buyer(self, event: str, data: Dict[str, Any]):
         await self.broadcast(event, data, roles=["farmer", "buyer"])

@@ -5,6 +5,20 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// Attach JWT access token to every outgoing request if stored
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+}, (error) => Promise.reject(error));
+
+// ──────────── AUTHENTICATION ────────────
+export const loginUser = (credentials) => api.post('/auth/login', credentials);
+export const getCurrentUser = () => api.get('/auth/me');
+export const getUsers = () => api.get('/auth/users');
+
 // ──────────── FARMERS ────────────
 export const getFarmers = () => api.get('/farmers');
 export const createFarmer = (data) => api.post('/farmers', data);
@@ -31,10 +45,12 @@ export const rejectOrder = (id) => api.post(`/orders/${id}/reject`);
 export const getBuyerRequests = () => api.get('/buyer-requests');
 export const createBuyerRequest = (data) => api.post('/buyer-requests', data);
 
-// ──────────── VEHICLES ────────────
+// ──────────── VEHICLES & TRANSPORTER ────────────
 export const getVehicles = () => api.get('/vehicles');
 export const createVehicle = (data) => api.post('/vehicles', data);
 export const updateVehicleStatus = (id, status) => api.put(`/vehicles/${id}/status`, { status });
+export const getTransporterJobs = () => api.get('/transport/jobs');
+export const updateTransportStatus = (orderId, status) => api.post(`/transport/orders/${orderId}/update-status`, { status });
 
 // ──────────── TRANSPORT AGENT ────────────
 export const getTransportRecommendation = (orderId) => api.get(`/transport/recommendations/${orderId}`);
