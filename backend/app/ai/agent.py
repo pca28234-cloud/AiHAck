@@ -67,38 +67,43 @@ async def parse_harvest_nl(text: str) -> Optional[Dict[str, Any]]:
                      "quality_grade": "A", "availability": "tomorrow morning"}
     """
     model = _get_model()
-    if not model:
-        return None
+    if model:
+        try:
+            prompt = HARVEST_PARSE_PROMPT.format(input_text=text)
+            response = model.generate_content(prompt)
+            result = _safe_parse_json(response.text)
 
-    try:
-        prompt = HARVEST_PARSE_PROMPT.format(input_text=text)
-        response = model.generate_content(prompt)
-        result = _safe_parse_json(response.text)
+            if result:
+                eq = result.get("estimated_quantity")
+                qg = result.get("quality_grade", "")
+                if eq and isinstance(eq, (int, float)) and eq > 0 and qg.upper() in ("A", "B", "C"):
+                    result["quality_grade"] = qg.upper()
+                    esq = result.get("expected_sorted_quantity")
+                    if esq is not None and (not isinstance(esq, (int, float)) or esq < 0):
+                        result["expected_sorted_quantity"] = None
+                    return result
+        except Exception as e:
+            print(f"⚠ AI model parsing failed, falling back to rule-based NLP: {e}")
 
-        if not result:
-            return None
+    # Robust local NLP fallback
+    import re
+    from datetime import date, timedelta
+    lower = text.lower()
+    qty_m = re.search(r'(\d+(?:\.\d+)?)\s*(?:kg|kilos?|kgs|quintals?|tons?)', lower) or re.search(r'(\d+)', lower)
+    grade_m = re.search(r'grade\s*([abc])', lower) or re.search(r'\b([abc])\s*grade\b', lower)
+    date_val = (date.today() + timedelta(days=1)).isoformat() if "tomorrow" in lower else date.today().isoformat()
 
-        # Validate parsed data
-        eq = result.get("estimated_quantity")
-        if eq is None or not isinstance(eq, (int, float)) or eq <= 0:
-            return None
+    if qty_m:
+        qty = float(qty_m.group(1))
+        grade = grade_m.group(1).upper() if grade_m else "A"
+        return {
+            "estimated_quantity": qty,
+            "expected_sorted_quantity": round(qty * 0.9, 1),
+            "quality_grade": grade,
+            "availability": date_val
+        }
 
-        qg = result.get("quality_grade", "")
-        if qg.upper() not in ("A", "B", "C"):
-            return None
-
-        # Normalize
-        result["quality_grade"] = qg.upper()
-        esq = result.get("expected_sorted_quantity")
-        if esq is not None and (not isinstance(esq, (int, float)) or esq < 0):
-            result["expected_sorted_quantity"] = None
-
-        return result
-
-    except Exception as e:
-        print(f"⚠ AI harvest parsing failed: {e}")
-        traceback.print_exc()
-        return None
+    return None
 
 
 async def generate_ai_explanation(

@@ -37,6 +37,11 @@ async def get_db():
 async def init_db():
     """Create all tables on startup."""
     async with engine.begin() as conn:
-        from app.models.models import Farmer, Harvest, Buyer, Order, Vehicle, Allocation  # noqa
+        from app.models.models import (  # noqa
+            Farmer, Harvest, Buyer, Order, BuyerRequest,
+            Vehicle, Allocation, TransportRecommendation,
+            TruckAllocation, Notification
+        )
         await conn.run_sync(Base.metadata.create_all)
     print("Database initialized successfully")
+

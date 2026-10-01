@@ -62,6 +62,9 @@ class HarvestCreate(BaseModel):
     sorted_quantity: Optional[float] = Field(None, ge=0, description="Sorted quantity in kg")
     quality_grade: str = Field(..., description="Quality grade: A, B, or C")
     harvest_date: str = Field(..., description="Harvest date (YYYY-MM-DD)")
+    available_date: Optional[str] = Field(None, description="Available date (YYYY-MM-DD)")
+    location: Optional[str] = Field(None, max_length=200)
+    expected_price: Optional[float] = Field(None, gt=0)
     status: str = Field(default="estimated")
 
     @field_validator("quality_grade")
@@ -112,6 +115,9 @@ class HarvestResponse(BaseModel):
     sorted_quantity: Optional[float]
     quality_grade: str
     harvest_date: str
+    available_date: Optional[str] = None
+    location: Optional[str] = None
+    expected_price: Optional[float] = None
     status: str
     farmer_name: Optional[str] = None
     farmer_location: Optional[str] = None

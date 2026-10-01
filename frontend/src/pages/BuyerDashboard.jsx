@@ -1,481 +1,665 @@
-import React, { useEffect, useState } from 'react';
-import { getBuyers, getOrders, createOrder, getFarmers, getVehicles } from '../services/api';
-import { useNavigate } from 'react-router-dom';
-import LoadingSpinner from '../components/LoadingSpinner';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
-  ShoppingCart, Plus, Check, Truck, Sprout, X, AlertTriangle, LogOut,
-  History, MapPin, Mail, Activity, Wallet, User, Phone, Shield, Bot, Send, Loader
+  getBuyers, getAvailableHarvests, createBuyerRequest,
+  getOrdersExtended, getNotifications
+} from '../services/api';
+import { useNavigate } from 'react-router-dom';
+import { useWebSocket } from '../hooks/useWebSocket';
+import LoadingSpinner from '../components/LoadingSpinner';
+import TransportPanel from '../components/TransportPanel';
+import NotificationsPanel from '../components/NotificationsPanel';
+import OrderStatusTracker from '../components/OrderStatusTracker';
+import {
+  ShoppingCart, Search, Sprout, Truck, Bell, X, Check, AlertTriangle,
+  LogOut, MapPin, Package, BarChart3, Clock, RefreshCw, ChevronRight,
+  User, Phone, Shield, IndianRupee, Bot, Filter, Plus, Send, Loader
 } from 'lucide-react';
-
-// Hardcoded demo profile details for buyer
-const BUYER_PROFILE = {
-  phone: '9123456789',
-  aadhaar_last4: '4521',
-};
 
 export default function BuyerDashboard() {
   const [buyer, setBuyer] = useState(null);
-  const [orders, setOrders] = useState([]);
-  const [farmers, setFarmers] = useState([]);
-  const [vehicles, setVehicles] = useState([]);
+  const [availableHarvests, setAvailableHarvests] = useState([]);
+  const [myOrders, setMyOrders] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  const [activeTab, setActiveTab] = useState('farmers');
-  const [showOrderForm, setShowOrderForm] = useState(false);
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [orderForm, setOrderForm] = useState({
-    quantity: '', quality_grade: 'A', delivery_date: new Date().toISOString().split('T')[0]
-  });
   const [success, setSuccess] = useState(null);
 
-  // AI Chat state
+  const [activeTab, setActiveTab] = useState('browse');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [gradeFilter, setGradeFilter] = useState('all');
+  const [selectedOrderId, setSelectedOrderId] = useState(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showRequestForm, setShowRequestForm] = useState(null); // harvest object
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+
+  // AI Assistant states for buyer
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiInput, setAiInput] = useState('');
-  const [aiMessages, setAiMessages] = useState([
-    { role: 'ai', text: "Hi! I'm your AI buying assistant. Tell me what you need — e.g. \"I want 500 kg of Grade A tomatoes by tomorrow\"." }
-  ]);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiMatchOption, setAiMatchOption] = useState(null);
+  const [aiMessages, setAiMessages] = useState([
+    {
+      role: 'ai',
+      text: "👋 Hello! I'm your AI Procurement Assistant.\n\nTell me what produce and quantity you need — for example:\n• \"I want 500 kg Grade A tomatoes for tomorrow\"\n• \"Looking for 1000 kg Grade B produce\"\n\nI'll find the best matching farmer harvests and help you request them instantly!"
+    }
+  ]);
+
+  const [requestForm, setRequestForm] = useState({
+    quantity: '',
+    quality_grade: 'A',
+    delivery_date: new Date().toISOString().split('T')[0],
+    delivery_location: '',
+    message: '',
+  });
 
   const navigate = useNavigate();
 
-  useEffect(() => { loadData(); }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
-      setLoading(true);
-      const [bRes, oRes, fRes, vRes] = await Promise.all([
-        getBuyers(), getOrders(), getFarmers(), getVehicles()
+      const [bRes, hRes, oRes, nRes] = await Promise.allSettled([
+        getBuyers(),
+        getAvailableHarvests(),
+        getOrdersExtended(),
+        getNotifications('buyer'),
       ]);
 
-      if (bRes.data.length > 0) {
-        const currentBuyer = bRes.data[0];
+      let currentBuyer = null;
+      if (bRes.status === 'fulfilled' && bRes.value.data?.length > 0) {
+        currentBuyer = bRes.value.data[0];
         setBuyer(currentBuyer);
-        const buyerOrders = oRes.data.filter(o => o.buyer_id === currentBuyer.id)
-          .sort((a, b) => new Date(b.delivery_date) - new Date(a.delivery_date));
-        setOrders(buyerOrders);
       }
-      setFarmers(fRes.data);
-      setVehicles(vRes.data);
+
+      if (hRes.status === 'fulfilled' && hRes.value.data) {
+        setAvailableHarvests(hRes.value.data);
+      }
+
+      if (oRes.status === 'fulfilled' && oRes.value.data) {
+        setMyOrders(oRes.value.data.filter(o => !currentBuyer || o.buyer_name === currentBuyer.name));
+      }
+
+      if (nRes.status === 'fulfilled' && nRes.value.data) {
+        setNotifications(nRes.value.data);
+      }
     } catch (err) {
-      setError('Failed to load dashboard data.');
+      console.error('Failed to load buyer data:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleCreateOrder = async (e) => {
-    e.preventDefault();
-    if (!buyer) return;
-    try {
-      await createOrder({
-        buyer_id: buyer.id,
-        quantity: parseFloat(orderForm.quantity),
-        quality_grade: orderForm.quality_grade,
-        delivery_date: orderForm.delivery_date,
-        recurring: false,
-        frequency: 'none',
-        status: 'active'
-      });
-      setShowOrderForm(false);
-      setOrderForm({ quantity: '', quality_grade: 'A', delivery_date: new Date().toISOString().split('T')[0] });
-      setSuccess('Order placed successfully! The AI Coordinator is matching it with farmers.');
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // WebSocket real-time updates
+  const handleWsEvent = useCallback((event, data) => {
+    console.log('[WS Buyer]', event, data);
+    if (event === 'harvest_created') {
+      setSuccess('🌾 New harvest available!');
       loadData();
-    } catch (err) {
-      setError('Failed to place order.');
+    } else if (event === 'request_accepted') {
+      setSuccess(`✅ Your order #${data.order_id} was accepted! Transport is being arranged...`);
+      loadData();
+    } else if (event === 'transport_allocated') {
+      setSuccess(`🚛 Transport assigned for Order #${data.order_id}!`);
+      setSelectedOrderId(data.order_id);
+      setActiveTab('orders');
+      loadData();
+    } else if (event === 'truck_status_updated') {
+      setSuccess(`Truck ${data.vehicle_number}: ${data.old_status} → ${data.new_status}`);
+      loadData();
+    } else if (event === 'notification') {
+      setNotifications(prev => [data, ...prev]);
+    }
+  }, [loadData]);
+
+  useWebSocket('buyer', handleWsEvent);
+
+  useEffect(() => {
+    if (success || error) {
+      const t = setTimeout(() => { setSuccess(null); setError(null); }, 5000);
+      return () => clearTimeout(t);
+    }
+  }, [success, error]);
+
+  const handleRequestProduce = async (e) => {
+    e.preventDefault();
+    if (!showRequestForm) return;
+    setSubmittingRequest(true);
+
+    try {
+      let activeBuyer = buyer;
+      if (!activeBuyer) {
+        const bRes = await getBuyers();
+        if (bRes.data?.length > 0) {
+          activeBuyer = bRes.data[0];
+          setBuyer(activeBuyer);
+        }
+      }
+      const buyerId = activeBuyer?.id || 1;
+
+      await createBuyerRequest({
+        buyer_id: buyerId,
+        harvest_id: showRequestForm.id,
+        quantity: parseFloat(requestForm.quantity),
+        quality_grade: requestForm.quality_grade,
+        delivery_date: requestForm.delivery_date,
+        delivery_location: requestForm.delivery_location || activeBuyer?.location || 'Bangalore City',
+        message: requestForm.message,
+      });
+
+      setShowRequestForm(null);
+      setRequestForm({ quantity: '', quality_grade: 'A', delivery_date: new Date().toISOString().split('T')[0], delivery_location: '', message: '' });
+      setSuccess('✅ Purchase request sent to farmer! They have been notified.');
+      setActiveTab('orders');
+      await loadData();
+    } catch (e) {
+      console.error('Request error:', e);
+      setError(e.response?.data?.detail || e.message || 'Failed to send request.');
+    } finally {
+      setSubmittingRequest(false);
     }
   };
 
+  // ── AI ASSISTANT FOR BUYER ──
   const handleAISend = async () => {
     if (!aiInput.trim()) return;
     const userMsg = aiInput.trim();
     setAiMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setAiInput('');
     setAiLoading(true);
+    setAiMatchOption(null);
 
-    // Simple pattern matching to detect quantity + grade requests
-    await new Promise(r => setTimeout(r, 1200));
+    await new Promise(r => setTimeout(r, 450));
 
     const lower = userMsg.toLowerCase();
-    const qtyMatch = lower.match(/(\d+)\s*kg/);
-    const gradeMatch = lower.match(/grade\s*([abc])/i);
-    const qty = qtyMatch ? qtyMatch[1] : null;
+    const qtyMatch = lower.match(/(\d+(?:\.\d+)?)\s*(?:kg|kilos?|kgs|quintals?|tons?)/i) || lower.match(/(\d+)/);
+    const gradeMatch = lower.match(/grade\s*([abc])/i) || lower.match(/\b([abc])\s*grade\b/i);
+    const qty = qtyMatch ? parseFloat(qtyMatch[1]) : 500;
     const grade = gradeMatch ? gradeMatch[1].toUpperCase() : 'A';
 
-    // Check supply from farmers
-    const totalAvailable = farmers.reduce((sum, f) => sum + (f.farm_size * 80), 0).toFixed(0);
-
-    let reply = '';
-    if (qty) {
-      if (parseInt(qty) <= parseInt(totalAvailable)) {
-        reply = `✅ Great news! We can fulfill your request for **${qty} kg of Grade ${grade} tomatoes**.\n\n` +
-          `📦 Available from ${farmers.length} registered farmers in the network.\n` +
-          `🚛 Delivery can be arranged within 24 hours.\n\n` +
-          `Would you like me to place this order automatically?`;
-      } else {
-        reply = `⚠️ Your request for **${qty} kg** is quite large. We currently have an estimated **${totalAvailable} kg** available across ${farmers.length} farmers.\n\n` +
-          `I recommend placing a partial order. Shall I set it up for ${totalAvailable} kg?`;
-      }
-    } else {
-      reply = `I noticed your request but couldn't detect a specific quantity. Could you say something like:\n\n"I need **500 kg** of Grade A tomatoes by Friday."`;
+    // Find closest harvest in availableHarvests
+    let matchedHarvest = availableHarvests.find(h => h.quality_grade === grade && (h.available_quantity || h.estimated_quantity) >= qty);
+    if (!matchedHarvest && availableHarvests.length > 0) {
+      matchedHarvest = availableHarvests.find(h => h.quality_grade === grade) || availableHarvests[0];
     }
 
-    setAiMessages(prev => [...prev, { role: 'ai', text: reply }]);
+    if (matchedHarvest) {
+      const matchObj = {
+        harvest: matchedHarvest,
+        requested_qty: qty,
+        grade: grade,
+      };
+      setAiMatchOption(matchObj);
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        text: `🎯 **Found Matching Supply!**\n\n• **Farmer:** ${matchedHarvest.farmer_name}\n• **Crop:** ${matchedHarvest.crop} (Grade ${matchedHarvest.quality_grade})\n• **Available:** ${matchedHarvest.available_quantity || matchedHarvest.estimated_quantity} kg\n• **Location:** ${matchedHarvest.farmer_location}\n• **Price:** ₹${matchedHarvest.expected_price || 25}/kg\n\nWould you like to send a purchase request for **${qty} kg** to this farmer?`
+      }]);
+    } else {
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        text: `We currently have ${availableHarvests.length} active harvests listed. Tell me the quantity you need, for example:\n\n*"I want 500 kg Grade A tomatoes"*`
+      }]);
+    }
     setAiLoading(false);
   };
 
-  const handleLogout = () => { navigate('/'); };
+  const handleAIRequestConfirm = async () => {
+    if (!aiMatchOption) return;
+    try {
+      const activeBuyerId = buyer?.id || 1;
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const deliveryDate = tomorrow.toISOString().split('T')[0];
 
-  useEffect(() => {
-    if (success || error) {
-      const t = setTimeout(() => { setSuccess(null); setError(null); }, 4000);
-      return () => clearTimeout(t);
+      await createBuyerRequest({
+        buyer_id: activeBuyerId,
+        harvest_id: aiMatchOption.harvest.id,
+        quantity: aiMatchOption.requested_qty,
+        quality_grade: aiMatchOption.grade,
+        delivery_date: deliveryDate,
+        delivery_location: buyer?.location || 'Bangalore City',
+        message: 'Requested via AI Procurement Assistant',
+      });
+
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        text: `🎉 **Purchase request sent!** ${aiMatchOption.harvest.farmer_name} has received your request for **${aiMatchOption.requested_qty} kg**. Once they accept, our AI Transport Agent will automatically allocate optimal trucks!`
+      }]);
+      setAiMatchOption(null);
+      setSuccess(`✅ Purchase request sent to ${aiMatchOption.harvest.farmer_name}!`);
+      await loadData();
+    } catch (err) {
+      console.error('AI Request confirm error:', err);
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        text: `❌ Request could not be sent: ${err.response?.data?.detail || err.message || 'Please try again.'}`
+      }]);
     }
-  }, [success, error]);
+  };
+
+  const filteredHarvests = availableHarvests.filter(h => {
+    const matchSearch = searchQuery === '' ||
+      h.crop?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      h.farmer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      h.farmer_location?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchGrade = gradeFilter === 'all' || h.quality_grade === gradeFilter;
+    return matchSearch && matchGrade;
+  });
+
+  const unreadCount = notifications.filter(n => !n.is_read).length;
+  const gradeColor = { A: 'bg-primary-100 text-primary-700', B: 'bg-amber-100 text-amber-700', C: 'bg-stone-100 text-stone-600' };
 
   if (loading) return <LoadingSpinner message="Loading your dashboard..." />;
-  if (!buyer && !loading) return (
-    <div className="max-w-7xl mx-auto px-4 py-12 text-center text-stone-500">
-      <AlertTriangle className="w-8 h-8 mx-auto mb-3" />
-      No buyer profile found.
-    </div>
-  );
 
   return (
-    <div className="min-h-screen bg-surface-50 font-sans pb-12" id="buyer-dashboard">
+    <div className="min-h-screen bg-stone-50 font-sans" id="buyer-dashboard">
 
-      {/* Buyer Topbar */}
+      {/* Topbar */}
       <div className="bg-white border-b border-stone-200 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-harvest-400 to-harvest-600 flex items-center justify-center shadow-lg shadow-harvest-500/20">
-              <ShoppingCart className="w-6 h-6 text-white" />
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-harvest-500 to-harvest-600 flex items-center justify-center">
+              <ShoppingCart className="w-5 h-5 text-white" />
             </div>
-            <span className="font-display font-bold text-xl text-stone-900 tracking-tight">
-              Harvest<span className="text-harvest-500">Link</span> AI
-            </span>
+            <span className="font-bold text-lg text-stone-900">HarvestLink <span className="text-harvest-600">Buyer</span></span>
           </div>
-
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3">
-              <div className="text-right hidden sm:block">
-                <p className="text-sm font-bold text-stone-900">{buyer.name}</p>
-                <p className="text-xs text-stone-500">Buyer</p>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setActiveTab('notifications')} className="relative p-2 rounded-xl hover:bg-stone-100 transition-colors">
+              <Bell className="w-5 h-5 text-stone-500" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 w-4 h-4 bg-rose-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">{unreadCount}</span>
+              )}
+            </button>
+            <button onClick={() => setShowProfileModal(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-xl hover:bg-stone-100 transition-colors">
+              <div className="w-8 h-8 rounded-full bg-harvest-100 flex items-center justify-center">
+                <span className="font-bold text-harvest-700 text-sm">{buyer?.name?.charAt(0) || 'B'}</span>
               </div>
-              <button
-                onClick={() => setShowProfileModal(true)}
-                className="w-10 h-10 rounded-full bg-harvest-100 flex items-center justify-center border-2 border-harvest-50 hover:border-harvest-300 transition-colors cursor-pointer"
-                title="View Profile"
-              >
-                <span className="font-display font-bold text-harvest-700">{buyer.name.charAt(0)}</span>
-              </button>
-              <button onClick={handleLogout} className="p-2 text-stone-400 hover:text-rose-500 transition-colors ml-2" title="Logout">
-                <LogOut className="w-5 h-5" />
-              </button>
-            </div>
+              <span className="text-sm font-semibold text-stone-700 hidden sm:block">{buyer?.name?.split('—')[0]?.trim() || 'Buyer'}</span>
+            </button>
+            <button onClick={() => navigate('/')} className="p-2 text-stone-400 hover:text-rose-500 transition-colors" title="Logout">
+              <LogOut className="w-5 h-5" />
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
-        {success && <div className="mb-6 p-4 rounded-xl bg-harvest-50 border border-harvest-200 text-harvest-800 text-sm animate-slide-up shadow-sm flex items-center gap-3"><Check className="w-5 h-5 text-harvest-500" /> {success}</div>}
-        {error && <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm animate-slide-up shadow-sm flex items-center gap-3"><AlertTriangle className="w-5 h-5 text-rose-500" /> {error}</div>}
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {success && <div className="mb-4 p-4 rounded-xl bg-harvest-50 border border-harvest-200 text-harvest-800 text-sm flex items-center gap-3 animate-slide-up"><Check className="w-4 h-4" />{success}</div>}
+        {error && <div className="mb-4 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-center gap-3 animate-slide-up"><AlertTriangle className="w-4 h-4" />{error}</div>}
 
-        {/* Profile Header */}
-        <div className="bg-gradient-to-r from-stone-900 via-stone-800 to-stone-900 rounded-3xl p-8 mb-8 text-white shadow-xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-12 opacity-10 pointer-events-none">
-            <ShoppingCart className="w-64 h-64 text-white transform rotate-12 translate-x-12 -translate-y-12" />
+        {/* Hero */}
+        <div className="bg-gradient-to-br from-stone-900 to-stone-800 rounded-2xl p-7 mb-6 text-white shadow-xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 opacity-5 pointer-events-none p-8">
+            <ShoppingCart className="w-48 h-48" />
           </div>
-          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
             <div>
-              <p className="text-stone-400 font-medium mb-1 text-sm">Welcome back,</p>
-              <h1 className="font-display text-4xl font-bold text-white tracking-tight">{buyer.name}</h1>
-              <div className="flex flex-wrap gap-4 mt-3 text-sm text-stone-300">
-                <span className="flex items-center gap-1.5"><MapPin className="w-4 h-4 text-harvest-400" /> {buyer.location}</span>
-                <span className="flex items-center gap-1.5"><Mail className="w-4 h-4 text-harvest-400" /> {buyer.contact}</span>
-                <span className="flex items-center gap-1.5"><Phone className="w-4 h-4 text-harvest-400" /> +91 {BUYER_PROFILE.phone}</span>
+              <p className="text-stone-400 text-sm mb-1">Welcome back,</p>
+              <h1 className="font-bold text-2xl sm:text-3xl text-white">{buyer?.name || 'Buyer'}</h1>
+              <div className="flex flex-wrap gap-4 mt-2 text-stone-300 text-sm">
+                <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-harvest-400" />{buyer?.location || 'Bangalore'}</span>
+                {myOrders.filter(o => o.status === 'transport_allocated').length > 0 && (
+                  <span className="flex items-center gap-1.5 bg-violet-500/20 text-violet-300 px-2 py-0.5 rounded-full text-xs font-bold">
+                    🚛 Transport assigned
+                  </span>
+                )}
               </div>
             </div>
-            <div className="flex gap-3 flex-wrap">
+            
+            {/* AI Assistant + Browse Produce buttons */}
+            <div className="flex items-center gap-3 flex-wrap">
               <button
                 onClick={() => setShowAIChat(true)}
-                className="flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-violet-600 text-white font-bold hover:bg-violet-500 transition-all shadow-lg shadow-violet-600/30 hover:-translate-y-1"
+                className="flex items-center gap-2 px-5 py-3.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold transition-all shadow-lg shadow-violet-600/30 hover:-translate-y-0.5"
+                title="Find and request produce with AI"
               >
-                <Bot className="w-5 h-5" /> AI Assistant
+                <Bot className="w-5 h-5 text-violet-200" /> AI Assistant
               </button>
-              <button onClick={() => setShowOrderForm(true)} className="flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-harvest-500 text-white font-bold hover:bg-harvest-400 transition-all shadow-lg shadow-harvest-500/30 hover:-translate-y-1">
-                <Plus className="w-6 h-6" /> Place Order
+              <button onClick={() => setActiveTab('browse')} className="flex items-center gap-2 px-6 py-3.5 rounded-xl bg-harvest-500 hover:bg-harvest-400 text-white font-bold transition-all shadow-lg shadow-harvest-500/30 hover:-translate-y-0.5">
+                <Sprout className="w-5 h-5" /> Browse Produce
               </button>
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+            {[
+              { label: 'Available Produce', value: availableHarvests.length, color: 'text-harvest-400' },
+              { label: 'My Orders', value: myOrders.length, color: 'text-sky-400' },
+              { label: 'Transport Assigned', value: myOrders.filter(o => o.status === 'transport_allocated').length, color: 'text-violet-400' },
+              { label: 'Delivered', value: myOrders.filter(o => o.status === 'delivered').length, color: 'text-primary-400' },
+            ].map(s => (
+              <div key={s.label} className="bg-white/10 rounded-xl p-3">
+                <p className={`font-bold text-xl ${s.color}`}>{s.value}</p>
+                <p className="text-stone-400 text-xs mt-0.5">{s.label}</p>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* 2-Column Layout */}
-        <div className="grid lg:grid-cols-3 gap-8">
+        {/* Tabs */}
+        <div className="flex gap-1 bg-white border border-stone-200 rounded-xl p-1 mb-6 overflow-x-auto no-scrollbar">
+          {[
+            { key: 'browse', label: 'Available Produce', badge: availableHarvests.length },
+            { key: 'orders', label: 'My Orders', badge: myOrders.filter(o => !['delivered','rejected'].includes(o.status)).length },
+            { key: 'notifications', label: 'Notifications', badge: unreadCount },
+          ].map(t => (
+            <button key={t.key} onClick={() => setActiveTab(t.key)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-all ${
+                activeTab === t.key ? 'bg-stone-900 text-white shadow-md' : 'text-stone-500 hover:text-stone-700 hover:bg-stone-50'
+              }`}
+            >
+              {t.label}
+              {t.badge > 0 && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeTab === t.key ? 'bg-white text-stone-900' : 'bg-harvest-500 text-white'}`}>{t.badge}</span>}
+            </button>
+          ))}
+        </div>
 
-          {/* Left Column: Order History */}
+        {/* Content */}
+        <div className="grid lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2">
-            <div className="bg-white rounded-2xl border border-stone-200 shadow-card overflow-hidden h-full">
-              <div className="px-8 py-6 border-b border-stone-100 flex items-center gap-3 bg-stone-50/50">
-                <div className="w-10 h-10 rounded-xl bg-harvest-50 flex items-center justify-center">
-                  <History className="w-5 h-5 text-harvest-600" />
-                </div>
-                <div>
-                  <h2 className="font-display font-bold text-xl text-stone-900">Order History</h2>
-                  <p className="text-sm text-stone-500">Your past and active tomato requests</p>
-                </div>
-              </div>
 
-              {orders.length === 0 ? (
-                <div className="p-16 text-center text-stone-400">
-                  <ShoppingCart className="w-12 h-12 mx-auto mb-4 opacity-20" />
-                  <p className="text-lg">You haven't placed any orders yet.</p>
-                  <button onClick={() => setShowOrderForm(true)} className="mt-4 text-harvest-600 font-medium hover:underline">Place your first order</button>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead>
-                      <tr className="bg-stone-50/80 text-stone-500 font-semibold uppercase tracking-wider text-xs border-b border-stone-100">
-                        <th className="px-8 py-4">Delivery By</th>
-                        <th className="px-8 py-4 text-right">Quantity</th>
-                        <th className="px-8 py-4 text-center">Quality</th>
-                        <th className="px-8 py-4 text-center">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100">
-                      {orders.map((o, i) => (
-                        <tr key={o.id} className="hover:bg-stone-50/50 transition-colors group">
-                          <td className="px-8 py-5">
-                            <span className={`font-semibold ${i === 0 ? 'text-stone-900' : 'text-stone-600'}`}>{o.delivery_date}</span>
-                            {i === 0 && <span className="ml-3 inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-rose-100 text-rose-700">Latest</span>}
-                          </td>
-                          <td className="px-8 py-5 text-right font-display font-bold text-stone-900 text-base">
-                            {o.quantity} <span className="text-xs font-sans text-stone-500 font-normal">kg</span>
-                          </td>
-                          <td className="px-8 py-5 text-center">
-                            <span className={`inline-flex items-center justify-center w-8 h-8 rounded-xl text-sm font-bold shadow-sm ${
-                              o.quality_grade === 'A' ? 'bg-primary-50 text-primary-700 border border-primary-100' :
-                              o.quality_grade === 'B' ? 'bg-harvest-50 text-harvest-700 border border-harvest-100' :
-                              'bg-stone-100 text-stone-700 border border-stone-200'
-                            }`}>
-                              {o.quality_grade}
-                            </span>
-                          </td>
-                          <td className="px-8 py-5 text-center">
-                            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
-                              o.status === 'active' ? 'bg-sky-50 text-sky-700 border border-sky-100' :
-                              o.status === 'fulfilled' ? 'bg-primary-50 text-primary-700 border border-primary-100' :
-                              'bg-stone-100 text-stone-600 border border-stone-200'
-                            }`}>
-                              {o.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Right Column: Action Center */}
-          <div className="lg:col-span-1">
-            <div className="bg-white rounded-2xl border border-stone-200 shadow-card overflow-hidden h-full flex flex-col">
-              <div className="px-6 py-5 border-b border-stone-100 flex items-center gap-3 bg-stone-50/50">
-                <div className="w-10 h-10 rounded-xl bg-stone-900 flex items-center justify-center">
-                  <Activity className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h2 className="font-display font-bold text-lg text-stone-900">Action Center</h2>
-                  <p className="text-xs text-stone-500">Matched fulfillment details</p>
-                </div>
-              </div>
-
-              <div className="flex border-b border-stone-100 bg-white p-3 gap-2 overflow-x-auto no-scrollbar">
-                <button onClick={() => setActiveTab('alerts')} className={`px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${activeTab === 'alerts' ? 'bg-stone-900 text-white shadow-md' : 'text-stone-500 hover:bg-stone-100'}`}>Alerts</button>
-                <button onClick={() => setActiveTab('farmers')} className={`px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${activeTab === 'farmers' ? 'bg-primary-600 text-white shadow-md' : 'text-stone-500 hover:bg-stone-100'}`}>
-                  Farmers {farmers.length > 0 && <span className="ml-1 opacity-90">({farmers.length})</span>}
-                </button>
-                <button onClick={() => setActiveTab('transport')} className={`px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${activeTab === 'transport' ? 'bg-violet-600 text-white shadow-md' : 'text-stone-500 hover:bg-stone-100'}`}>
-                  Transport {vehicles.length > 0 && <span className="ml-1 opacity-90">({vehicles.length})</span>}
-                </button>
-                <button onClick={() => setActiveTab('payments')} className={`px-4 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${activeTab === 'payments' ? 'bg-emerald-600 text-white shadow-md' : 'text-stone-500 hover:bg-stone-100'}`}>
-                  Payments
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto bg-stone-50/30 p-2">
-                {activeTab === 'alerts' && (
-                  <div className="p-8 text-center text-stone-400 text-sm">No new system alerts.</div>
-                )}
-
-                {activeTab === 'farmers' && (
-                  farmers.length === 0 ? (
-                    <div className="p-8 text-center text-stone-400 text-sm">No matched farmers yet.</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {farmers.map(f => (
-                        <div key={`farmer-${f.id}`} className="bg-white p-4 rounded-xl border border-stone-100 shadow-sm hover:shadow-md transition-shadow">
-                          <div className="flex items-start gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-primary-50 flex items-center justify-center flex-shrink-0">
-                              <Sprout className="w-5 h-5 text-primary-600" />
-                            </div>
-                            <div className="flex-1">
-                              <p className="text-sm text-stone-900 leading-snug">Farmer <span className="font-bold">{f.name}</span> has harvests ready in <span className="font-medium text-primary-700">{f.location}</span>.</p>
-                              <p className="text-xs text-stone-500 mt-1 font-medium">{f.producer_type === 'small' ? 'Small' : 'Large'} Producer ({f.farm_size} ha)</p>
-                              <button onClick={() => { setSuccess(`Requested direct allocation from ${f.name}.`); }} className="mt-4 w-full py-2 rounded-lg bg-primary-600 text-white text-xs font-bold hover:bg-primary-700 transition-colors shadow-sm">
-                                View Allocated Crops
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )
-                )}
-
-                {activeTab === 'transport' && (
-                  vehicles.length === 0 ? (
-                    <div className="p-8 text-center text-stone-400 text-sm">No vehicle assignments yet.</div>
-                  ) : (
-                    <div className="space-y-2">
-                      {vehicles.map(v => (
-                        <div key={`veh-${v.id}`} className="bg-white p-4 rounded-xl border border-stone-100 shadow-sm hover:shadow-md transition-shadow">
-                          <div className="flex items-start gap-3">
-                            <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center flex-shrink-0">
-                              <Truck className="w-5 h-5 text-violet-600" />
-                            </div>
-                            <div className="flex-1">
-                              <p className="text-sm text-stone-900 leading-snug">Transporter <span className="font-bold">{v.vehicle_number}</span> is delivering your order.</p>
-                              <p className="text-xs text-stone-500 mt-1 font-medium">Status: <span className="text-violet-700">En Route</span></p>
-                              <button onClick={() => { setSuccess(`Tracking transporter ${v.vehicle_number}.`); }} className="mt-4 w-full py-2 rounded-lg bg-violet-100 text-violet-700 text-xs font-bold hover:bg-violet-200 transition-colors">
-                                Track Delivery
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )
-                )}
-
-                {activeTab === 'payments' && (
-                  <div className="space-y-4 p-2">
-                    <div className="bg-gradient-to-br from-emerald-500 to-emerald-700 p-6 rounded-2xl text-white shadow-lg">
-                      <p className="text-emerald-100 text-xs font-bold uppercase tracking-wider mb-1">Outstanding Balance</p>
-                      <h3 className="font-display text-3xl font-bold">₹ 15,000</h3>
-                      <button onClick={() => setSuccess('Payment processed successfully!')} className="mt-4 w-full py-2 rounded-xl bg-white text-emerald-700 text-sm font-bold shadow-md hover:bg-stone-50 transition-colors">
-                        Pay Now
+            {/* ── BROWSE PRODUCE ── */}
+            {activeTab === 'browse' && (
+              <div className="space-y-4">
+                {/* Search & Filter */}
+                <div className="bg-white rounded-2xl border border-stone-200 p-4 shadow-sm flex flex-col sm:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-stone-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search by crop, farmer, or location..."
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30 focus:border-harvest-500"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    {['all', 'A', 'B', 'C'].map(g => (
+                      <button
+                        key={g}
+                        onClick={() => setGradeFilter(g)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                          gradeFilter === g ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                        }`}
+                      >
+                        {g === 'all' ? 'All Grades' : `Grade ${g}`}
                       </button>
-                    </div>
-                    <div className="bg-white p-4 rounded-xl border border-stone-100 shadow-sm">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-sm font-bold text-stone-900">Recent Transactions</span>
-                        <span className="text-xs font-bold text-stone-500">This Month</span>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center text-sm border-b border-stone-50 pb-2">
-                          <span className="text-stone-600">Paid to Ravi Kumar (Farmer)</span>
-                          <span className="font-bold text-emerald-600">-₹ 8,500</span>
+                    ))}
+                    <button onClick={loadData} className="p-2 hover:bg-stone-100 rounded-xl transition-colors" title="Refresh">
+                      <RefreshCw className="w-4 h-4 text-stone-400" />
+                    </button>
+                  </div>
+                </div>
+
+                {filteredHarvests.length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center text-stone-400">
+                    <Sprout className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                    <p>No harvests match your criteria. Check back soon!</p>
+                  </div>
+                ) : (
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    {filteredHarvests.map(h => (
+                      <div key={h.id} className="bg-white rounded-2xl border border-stone-200 p-5 shadow-sm hover:shadow-md hover:border-stone-300 transition-all">
+                        <div className="flex items-start justify-between mb-3">
+                          <div>
+                            <span className="font-bold text-lg text-stone-900">{h.crop}</span>
+                            <p className="text-xs text-stone-500 flex items-center gap-1 mt-0.5">
+                              <User className="w-3 h-3" /> {h.farmer_name}
+                            </p>
+                          </div>
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${gradeColor[h.quality_grade] || 'bg-stone-100 text-stone-700'}`}>
+                            Grade {h.quality_grade}
+                          </span>
                         </div>
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-stone-600">Transport Fee (Logistics Inc)</span>
-                          <span className="font-bold text-emerald-600">-₹ 1,200</span>
+
+                        <div className="space-y-1.5 text-xs text-stone-600 mb-4 bg-stone-50 rounded-xl p-3">
+                          <div className="flex justify-between">
+                            <span className="text-stone-400">Available:</span>
+                            <span className="font-bold text-stone-900">{h.available_quantity || h.estimated_quantity} kg</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-stone-400">Location:</span>
+                            <span className="font-medium text-stone-700">{h.farmer_location}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-stone-400">Available from:</span>
+                            <span className="font-medium text-stone-700">{h.available_date || h.harvest_date}</span>
+                          </div>
+                          {h.expected_price && (
+                            <div className="flex justify-between text-harvest-700 font-bold">
+                              <span>Price:</span>
+                              <span>₹{h.expected_price}/kg</span>
+                            </div>
+                          )}
                         </div>
+
+                        <button
+                          onClick={() => {
+                            setShowRequestForm(h);
+                            setRequestForm(prev => ({
+                              ...prev,
+                              quality_grade: h.quality_grade,
+                              quantity: Math.min(500, h.available_quantity || h.estimated_quantity).toString(),
+                            }));
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-harvest-600 hover:bg-harvest-700 text-white text-sm font-bold transition-colors shadow-sm flex items-center justify-center gap-1.5"
+                        >
+                          <ShoppingCart className="w-4 h-4" /> Request Produce
+                        </button>
                       </div>
-                    </div>
+                    ))}
                   </div>
                 )}
               </div>
-            </div>
+            )}
+
+            {/* ── MY ORDERS ── */}
+            {activeTab === 'orders' && (
+              <div className="space-y-4">
+                {myOrders.length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-stone-200 p-12 text-center text-stone-400">
+                    <Package className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                    <p>No orders yet. Browse available produce to send a request.</p>
+                  </div>
+                ) : (
+                  myOrders.map(order => (
+                    <div
+                      key={order.id}
+                      onClick={() => setSelectedOrderId(selectedOrderId === order.id ? null : order.id)}
+                      className={`bg-white rounded-2xl border shadow-sm overflow-hidden cursor-pointer transition-all hover:shadow-md ${
+                        selectedOrderId === order.id ? 'border-harvest-300 ring-2 ring-harvest-100' : 'border-stone-200'
+                      }`}
+                    >
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-bold text-stone-900">Order #{order.id}</span>
+                              <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+                                order.status === 'transport_allocated' ? 'bg-violet-50 text-violet-700 border-violet-100' :
+                                order.status === 'accepted' ? 'bg-primary-50 text-primary-700 border-primary-100' :
+                                order.status === 'delivered' ? 'bg-stone-100 text-stone-600 border-stone-200' :
+                                'bg-amber-50 text-amber-700 border-amber-100'
+                              }`}>{order.status?.replace('_', ' ')}</span>
+                            </div>
+                            <p className="text-sm text-stone-600">
+                              {order.quantity} kg Grade {order.quality_grade} {order.crop} · From <span className="font-semibold">{order.farmer_name || 'Farmer'}</span>
+                            </p>
+                            {order.transport && (
+                              <p className="text-xs text-violet-600 font-semibold mt-1">
+                                🚛 {order.transport.trucks_count} truck(s) assigned · Total freight: ₹{order.transport.total_cost?.toLocaleString()}
+                              </p>
+                            )}
+                          </div>
+                          <ChevronRight className={`w-5 h-5 text-stone-400 transition-transform ${selectedOrderId === order.id ? 'rotate-90' : ''}`} />
+                        </div>
+
+                        {/* Assigned Transporters and Truck Numbers */}
+                        {order.transport?.trucks && order.transport.trucks.length > 0 && (
+                          <div className="mt-3 pt-3 border-t border-stone-100">
+                            <p className="text-[11px] font-bold text-stone-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                              <Truck className="w-3.5 h-3.5 text-violet-600" />
+                              Assigned Transporters & Trucks:
+                            </p>
+                            <div className="grid sm:grid-cols-2 gap-2">
+                              {order.transport.trucks.map((truck, idx) => (
+                                <div key={idx} className="bg-stone-50 border border-stone-200/80 rounded-xl p-2.5 flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center text-violet-700 font-bold text-xs flex-shrink-0">
+                                      🚛
+                                    </div>
+                                    <div>
+                                      <p className="font-bold text-stone-900 text-xs font-mono">{truck.vehicle_number}</p>
+                                      <p className="text-[11px] text-stone-600 flex items-center gap-1">
+                                        <User className="w-3 h-3 text-stone-400" /> {truck.driver_name || 'Transporter Fleet'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-100 capitalize">
+                                      {truck.status?.replace('_', ' ') || 'Assigned'}
+                                    </span>
+                                    {truck.driver_contact && (
+                                      <p className="text-[10px] text-stone-400 mt-0.5 flex items-center justify-end gap-1">
+                                        <Phone className="w-2.5 h-2.5" /> {truck.driver_contact}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedOrderId === order.id && (
+                          <div className="mt-4">
+                            <OrderStatusTracker status={order.status} />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {/* ── NOTIFICATIONS ── */}
+            {activeTab === 'notifications' && (
+              <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-6">
+                <h2 className="font-bold text-xl text-stone-900 mb-4">Notifications</h2>
+                <NotificationsPanel
+                  notifications={notifications}
+                  onMarkRead={(id) => setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n))}
+                  maxShown={20}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Right Column: Transport Panel */}
+          <div className="lg:col-span-1">
+            {selectedOrderId ? (
+              <TransportPanel
+                orderId={selectedOrderId}
+                onStatusChange={loadData}
+              />
+            ) : (
+              <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-6 text-center text-stone-400">
+                <Bot className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                <p className="text-sm font-semibold text-stone-700 mb-1">AI Transport Agent</p>
+                <p className="text-xs text-stone-500">Select an order above to view real-time assigned trucks and logistics.</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* ═══ BUYER PROFILE MODAL ═══ */}
-      {showProfileModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={() => setShowProfileModal(false)}>
-          <div className="bg-white rounded-3xl w-full max-w-lg mx-4 shadow-2xl animate-scale-in overflow-hidden" onClick={e => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-stone-900 to-stone-800 p-8 relative">
-              <button onClick={() => setShowProfileModal(false)} className="absolute top-4 right-4 p-2 hover:bg-white/10 rounded-xl transition-colors">
-                <X className="w-5 h-5 text-white/60" />
-              </button>
-              <div className="flex items-center gap-5">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-harvest-400 to-harvest-600 flex items-center justify-center shadow-lg text-2xl font-display font-bold text-white">
-                  {buyer.name.charAt(0)}
+      {/* ── REQUEST PRODUCE MODAL ── */}
+      {showRequestForm && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={() => setShowRequestForm(null)}>
+          <div className="bg-white rounded-2xl p-7 w-full max-w-md mx-4 shadow-2xl animate-scale-in" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <h2 className="font-bold text-xl text-stone-900">Request Produce</h2>
+                <p className="text-sm text-stone-500 mt-0.5">
+                  {showRequestForm.crop} · {showRequestForm.farmer_name}
+                </p>
+              </div>
+              <button onClick={() => setShowRequestForm(null)} className="p-2 hover:bg-stone-100 rounded-xl"><X className="w-5 h-5 text-stone-500" /></button>
+            </div>
+            {/* Available info */}
+            <div className="bg-stone-50 rounded-xl p-4 mb-5 text-sm grid grid-cols-2 gap-2">
+              <div><p className="text-xs text-stone-400">Available</p><p className="font-bold text-stone-900">{showRequestForm.available_quantity || showRequestForm.estimated_quantity} kg</p></div>
+              <div><p className="text-xs text-stone-400">Grade</p><span className={`text-xs font-bold px-2 py-0.5 rounded-full ${gradeColor[showRequestForm.quality_grade] || 'bg-stone-100 text-stone-700'}`}>Grade {showRequestForm.quality_grade}</span></div>
+              <div><p className="text-xs text-stone-400">Location</p><p className="font-semibold text-stone-700">{showRequestForm.farmer_location}</p></div>
+              {showRequestForm.expected_price && <div><p className="text-xs text-stone-400">Price</p><p className="font-bold text-stone-900">₹{showRequestForm.expected_price}/kg</p></div>}
+            </div>
+            <form onSubmit={handleRequestProduce} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Quantity Required (kg)</label>
+                  <input type="number" min="1" max={showRequestForm.available_quantity || showRequestForm.estimated_quantity} required
+                    value={requestForm.quantity} onChange={e => setRequestForm({ ...requestForm, quantity: e.target.value })}
+                    className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30 focus:border-harvest-500"
+                    placeholder={`Max ${showRequestForm.available_quantity || showRequestForm.estimated_quantity}`} />
                 </div>
                 <div>
-                  <h2 className="font-display text-2xl font-bold text-white">{buyer.name}</h2>
-                  <p className="text-stone-400 text-sm mt-0.5">Buyer • {buyer.location}</p>
+                  <label className="block text-sm font-bold text-stone-700 mb-1.5">Quality Required</label>
+                  <select value={requestForm.quality_grade} onChange={e => setRequestForm({ ...requestForm, quality_grade: e.target.value })}
+                    className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30">
+                    <option value="A">Grade A</option>
+                    <option value="B">Grade B</option>
+                    <option value="C">Grade C</option>
+                  </select>
                 </div>
               </div>
-            </div>
-
-            <div className="p-6 space-y-4">
-              {/* Name */}
-              <div className="flex items-start gap-4 p-4 bg-harvest-50/50 border border-harvest-100 rounded-xl">
-                <div className="w-10 h-10 rounded-lg bg-harvest-100 flex items-center justify-center flex-shrink-0">
-                  <User className="w-5 h-5 text-harvest-700" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-harvest-700 uppercase tracking-wider mb-0.5">Full Name</p>
-                  <p className="text-lg font-display font-bold text-stone-900">{buyer.name}</p>
-                </div>
+              <div>
+                <label className="block text-sm font-bold text-stone-700 mb-1.5">Delivery Date</label>
+                <input type="date" required value={requestForm.delivery_date} onChange={e => setRequestForm({ ...requestForm, delivery_date: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30" />
               </div>
-
-              {/* Contact */}
-              <div className="flex items-start gap-4 p-4 bg-sky-50/50 border border-sky-100 rounded-xl">
-                <div className="w-10 h-10 rounded-lg bg-sky-100 flex items-center justify-center flex-shrink-0">
-                  <Phone className="w-5 h-5 text-sky-700" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-sky-700 uppercase tracking-wider mb-0.5">Contact Number</p>
-                  <p className="text-lg font-display font-bold text-stone-900">+91 {BUYER_PROFILE.phone}</p>
-                  <p className="text-xs text-stone-500 mt-0.5">{buyer.contact}</p>
-                </div>
+              <div>
+                <label className="block text-sm font-bold text-stone-700 mb-1.5">Delivery Location</label>
+                <input type="text" value={requestForm.delivery_location} onChange={e => setRequestForm({ ...requestForm, delivery_location: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30"
+                  placeholder={buyer?.location || 'Bangalore City'} />
               </div>
-
-              {/* Aadhaar */}
-              <div className="flex items-start gap-4 p-4 bg-violet-50/50 border border-violet-100 rounded-xl">
-                <div className="w-10 h-10 rounded-lg bg-violet-100 flex items-center justify-center flex-shrink-0">
-                  <Shield className="w-5 h-5 text-violet-700" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-xs font-bold text-violet-700 uppercase tracking-wider mb-0.5">Aadhaar Verification</p>
-                  <div className="flex items-center gap-2">
-                    <p className="text-lg font-display font-bold text-stone-900 tracking-widest">XXXX XXXX {BUYER_PROFILE.aadhaar_last4}</p>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 text-[10px] font-bold uppercase">
-                      <Check className="w-3 h-3" /> Verified
-                    </span>
-                  </div>
-                </div>
+              <div>
+                <label className="block text-sm font-bold text-stone-700 mb-1.5">Message (optional)</label>
+                <textarea rows={2} value={requestForm.message} onChange={e => setRequestForm({ ...requestForm, message: e.target.value })}
+                  className="w-full px-4 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30 resize-none"
+                  placeholder="Any special handling or packaging instructions..." />
               </div>
-            </div>
-
-            <div className="px-6 py-4 border-t border-stone-100 bg-stone-50/50 flex justify-end">
-              <button onClick={() => setShowProfileModal(false)} className="px-6 py-2.5 rounded-xl bg-stone-900 text-white text-sm font-bold hover:bg-stone-800 transition-colors shadow-md">
-                Close
+              {requestForm.quantity && (
+                <div className="bg-harvest-50 rounded-xl p-3 text-sm text-harvest-800 flex justify-between">
+                  <span>Estimated total value:</span>
+                  <span className="font-bold">₹{((parseFloat(requestForm.quantity) || 0) * (showRequestForm.expected_price || 25)).toLocaleString()}</span>
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={submittingRequest}
+                className="w-full py-3.5 rounded-xl bg-harvest-600 text-white font-bold hover:bg-harvest-700 transition-colors shadow-lg mt-2 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {submittingRequest ? <Loader className="w-5 h-5 animate-spin" /> : <ShoppingCart className="w-5 h-5" />}
+                {submittingRequest ? 'Sending Request...' : 'Send Purchase Request'}
               </button>
-            </div>
+            </form>
           </div>
         </div>
       )}
 
-      {/* ═══ AI CHAT MODAL ═══ */}
+      {/* ── AI CHAT PROCUREMENT MODAL ── */}
       {showAIChat && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 animate-fade-in" onClick={() => setShowAIChat(false)}>
           <div className="bg-white rounded-3xl w-full max-w-lg mx-4 mb-4 sm:mb-0 shadow-2xl animate-scale-in overflow-hidden flex flex-col" style={{ maxHeight: '85vh' }} onClick={e => e.stopPropagation()}>
-            {/* Header */}
             <div className="bg-gradient-to-r from-violet-600 to-violet-800 p-5 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
                   <Bot className="w-6 h-6 text-white" />
                 </div>
                 <div>
-                  <h2 className="font-bold text-white text-lg">AI Buying Assistant</h2>
-                  <p className="text-violet-200 text-xs">Tell me what you need in plain English</p>
+                  <h2 className="font-bold text-white text-lg">AI Procurement Assistant</h2>
+                  <p className="text-violet-200 text-xs">Tell us what you want to buy in plain words</p>
                 </div>
               </div>
               <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/10 rounded-xl transition-colors">
@@ -483,8 +667,7 @@ export default function BuyerDashboard() {
               </button>
             </div>
 
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50">
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50" style={{ minHeight: '280px', maxHeight: '50vh' }}>
               {aiMessages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   {msg.role === 'ai' && (
@@ -492,7 +675,7 @@ export default function BuyerDashboard() {
                       <Bot className="w-4 h-4 text-violet-600" />
                     </div>
                   )}
-                  <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line ${
+                  <div className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line ${
                     msg.role === 'user'
                       ? 'bg-violet-600 text-white rounded-br-sm'
                       : 'bg-white text-stone-800 border border-stone-200 rounded-bl-sm shadow-sm'
@@ -508,13 +691,23 @@ export default function BuyerDashboard() {
                   </div>
                   <div className="bg-white border border-stone-200 px-4 py-3 rounded-2xl rounded-bl-sm shadow-sm flex items-center gap-2">
                     <Loader className="w-4 h-4 text-violet-500 animate-spin" />
-                    <span className="text-stone-400 text-sm">Checking availability...</span>
+                    <span className="text-stone-500 text-sm">Matching available harvests...</span>
                   </div>
+                </div>
+              )}
+              {aiMatchOption && (
+                <div className="flex justify-start pt-2">
+                  <div className="w-8 h-8 mr-2 flex-shrink-0" />
+                  <button
+                    onClick={handleAIRequestConfirm}
+                    className="flex items-center gap-2 px-6 py-3 rounded-xl bg-harvest-600 text-white text-sm font-bold hover:bg-harvest-700 transition-colors shadow-md hover:-translate-y-0.5"
+                  >
+                    <Check className="w-4 h-4" /> Send Request ({aiMatchOption.requested_qty} kg)
+                  </button>
                 </div>
               )}
             </div>
 
-            {/* Input */}
             <div className="p-4 border-t border-stone-200 bg-white">
               <div className="flex gap-2">
                 <input
@@ -523,12 +716,13 @@ export default function BuyerDashboard() {
                   onChange={e => setAiInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAISend()}
                   className="flex-1 px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500 outline-none text-sm"
-                  placeholder="e.g. I want 500 kg of Grade A tomatoes..."
+                  placeholder="e.g. I want 600 kg Grade A tomatoes for tomorrow..."
                 />
                 <button
                   onClick={handleAISend}
                   disabled={aiLoading || !aiInput.trim()}
                   className="w-12 h-12 rounded-xl bg-violet-600 text-white flex items-center justify-center hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                  title="Send message to AI"
                 >
                   <Send className="w-4 h-4" />
                 </button>
@@ -538,35 +732,41 @@ export default function BuyerDashboard() {
         </div>
       )}
 
-      {/* Place Order Modal */}
-      {showOrderForm && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-md mx-4 shadow-2xl animate-scale-in">
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="font-display text-2xl font-bold text-stone-900">Place New Order</h2>
-              <button onClick={() => setShowOrderForm(false)} className="p-2 hover:bg-stone-100 rounded-xl transition-colors"><X className="w-5 h-5 text-stone-500" /></button>
+      {/* ── PROFILE MODAL ── */}
+      {showProfileModal && buyer && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowProfileModal(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md mx-4 shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-stone-900 to-stone-800 p-7">
+              <button onClick={() => setShowProfileModal(false)} className="absolute top-4 right-4 p-2 hover:bg-white/10 rounded-xl"><X className="w-5 h-5 text-white/60" /></button>
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 rounded-xl bg-harvest-500 flex items-center justify-center text-2xl font-bold text-white">{buyer.name.charAt(0)}</div>
+                <div>
+                  <h2 className="font-bold text-xl text-white">{buyer.name}</h2>
+                  <p className="text-stone-400 text-sm">Buyer Account</p>
+                </div>
+              </div>
             </div>
-            <form onSubmit={handleCreateOrder} className="space-y-5">
-              <div>
-                <label className="block text-sm font-bold text-stone-700 mb-2">Required Quantity (kg)</label>
-                <input type="number" step="1" min="1" required value={orderForm.quantity} onChange={(e) => setOrderForm({...orderForm, quantity: e.target.value})} className="w-full px-5 py-3 rounded-xl border border-stone-200 bg-stone-50 text-base focus:outline-none focus:ring-2 focus:ring-harvest-500/30 focus:border-harvest-500 transition-all font-medium" placeholder="e.g. 1000" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-bold text-stone-700 mb-2">Min Quality Grade</label>
-                  <select value={orderForm.quality_grade} onChange={(e) => setOrderForm({...orderForm, quality_grade: e.target.value})} className="w-full px-5 py-3 rounded-xl border border-stone-200 bg-stone-50 text-base focus:outline-none focus:ring-2 focus:ring-harvest-500/30 focus:border-harvest-500 transition-all font-medium">
-                    <option value="A">Grade A</option>
-                    <option value="B">Grade B</option>
-                    <option value="C">Grade C</option>
-                  </select>
+            <div className="p-6 space-y-3">
+              {[
+                { label: 'Location', value: buyer.location, icon: MapPin },
+                { label: 'Contact Person', value: buyer.contact || '—', icon: User },
+                { label: 'Phone', value: buyer.phone ? `+91 ${buyer.phone}` : '—', icon: Phone },
+                { label: 'Aadhaar', value: buyer.aadhaar_last4 ? `XXXX XXXX ${buyer.aadhaar_last4}` : '—', icon: Shield },
+              ].map(item => (
+                <div key={item.label} className="flex items-center gap-3 p-3 rounded-xl bg-stone-50 border border-stone-100">
+                  <div className="w-8 h-8 rounded-lg bg-stone-100 flex items-center justify-center flex-shrink-0">
+                    <item.icon className="w-4 h-4 text-stone-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-stone-400 font-semibold uppercase tracking-wide">{item.label}</p>
+                    <p className="text-sm font-bold text-stone-900">{item.value || '—'}</p>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-bold text-stone-700 mb-2">Needed By</label>
-                  <input type="date" required value={orderForm.delivery_date} onChange={(e) => setOrderForm({...orderForm, delivery_date: e.target.value})} className="w-full px-5 py-3 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-harvest-500/30 focus:border-harvest-500 transition-all font-medium" />
-                </div>
-              </div>
-              <button type="submit" className="w-full py-4 mt-4 rounded-xl bg-harvest-600 text-white font-bold text-lg hover:bg-harvest-700 transition-colors shadow-lg shadow-harvest-500/30 hover:-translate-y-0.5">Submit Order</button>
-            </form>
+              ))}
+            </div>
+            <div className="px-6 pb-6">
+              <button onClick={() => setShowProfileModal(false)} className="w-full py-3 rounded-xl bg-stone-900 text-white font-bold hover:bg-stone-800 transition-colors">Close</button>
+            </div>
           </div>
         </div>
       )}
