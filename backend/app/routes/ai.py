@@ -46,6 +46,7 @@ async def _gather_data(db: AsyncSession):
             available_quantity=available,
             quality_grade=harvest.quality_grade,
             previous_allocations=prev_allocations,
+            harvest_date=harvest.harvest_date,
         ))
 
     # Demand: active orders

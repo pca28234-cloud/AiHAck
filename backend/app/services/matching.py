@@ -12,6 +12,7 @@ but this engine is the source of truth for valid allocations.
 """
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -23,6 +24,11 @@ class SupplyItem:
     available_quantity: float  # sorted_quantity or estimated_quantity
     quality_grade: str  # A, B, C
     previous_allocations: int = 0  # how many times collected before
+    harvest_date: str = ""
+    original_grade: str = ""
+    current_grade: str = ""
+    days_since_harvest: int = 0
+    degradation_status: str = ""
 
 
 @dataclass
@@ -63,8 +69,53 @@ def quality_matches(supply_grade: str, demand_grade: str) -> bool:
     """Check if supply quality meets or exceeds demand requirement.
     Grade hierarchy: A > B > C
     """
+    if supply_grade == "Degraded":
+        return False
     grade_rank = {"A": 3, "B": 2, "C": 1}
     return grade_rank.get(supply_grade, 0) >= grade_rank.get(demand_grade, 0)
+
+def calculate_degradation(supply: List[SupplyItem]) -> List[SupplyItem]:
+    today = datetime.now().date()
+    valid_supply = []
+    
+    for s in supply:
+        s.original_grade = s.quality_grade
+        # parse harvest_date string
+        try:
+            h_date = datetime.strptime(s.harvest_date, "%Y-%m-%d").date()
+            s.days_since_harvest = (today - h_date).days
+        except (ValueError, TypeError):
+            s.days_since_harvest = 0
+
+        if s.days_since_harvest < 0:
+            s.days_since_harvest = 0
+            
+        degradation_steps = s.days_since_harvest // 4
+        
+        grades = ["A", "B", "C", "Degraded"]
+        try:
+            start_index = grades.index(s.original_grade.upper())
+            current_index = start_index + degradation_steps
+            if current_index >= len(grades) - 1:
+                s.current_grade = "Degraded"
+                s.degradation_status = "Degraded/Unusable"
+            else:
+                s.current_grade = grades[current_index]
+                if degradation_steps > 0:
+                    s.degradation_status = f"Degraded from {s.original_grade} to {s.current_grade}"
+                else:
+                    s.degradation_status = "Fresh"
+        except ValueError:
+            s.current_grade = "Degraded"
+            s.degradation_status = "Invalid original grade"
+            
+        # Update the grade for matching
+        s.quality_grade = s.current_grade
+        
+        if s.current_grade != "Degraded":
+            valid_supply.append(s)
+            
+    return valid_supply
 
 
 def run_matching(
@@ -91,6 +142,9 @@ def run_matching(
     Returns:
         Complete allocation result with metrics
     """
+    # ── Step 0: Calculate degradation and filter out unusable items ──
+    supply = calculate_degradation(supply)
+
     if not supply:
         return _empty_result(supply, demand, transport, "No harvest is currently available for allocation.")
 
@@ -218,6 +272,10 @@ def run_matching(
                 "quantity": a.quantity,
                 "quality_grade": a.quality_grade,
                 "collection_slot": a.collection_slot,
+                "original_grade": next((s.original_grade for s in supply if s.harvest_id == a.harvest_id), a.quality_grade),
+                "days_since_harvest": next((s.days_since_harvest for s in supply if s.harvest_id == a.harvest_id), 0),
+                "degradation_status": next((s.degradation_status for s in supply if s.harvest_id == a.harvest_id), "Fresh"),
+                "harvest_date": next((s.harvest_date for s in supply if s.harvest_id == a.harvest_id), ""),
             }
             for a in allocations
         ],
@@ -253,7 +311,12 @@ def _build_explanation(
 
     # Summarize allocations
     for a in allocations:
-        lines.append(f"• {a.farmer_name} → {a.buyer_name}: {a.quantity} kg (Grade {a.quality_grade})")
+        # Find original supply item to include degradation info
+        s_item = next((item for item in supply if item.harvest_id == a.harvest_id), None)
+        deg_str = ""
+        if s_item and s_item.original_grade != s_item.current_grade:
+            deg_str = f" (Degraded from {s_item.original_grade} due to {s_item.days_since_harvest} days age)"
+        lines.append(f"• {a.farmer_name} → {a.buyer_name}: {a.quantity} kg (Current Grade {a.quality_grade}){deg_str}")
 
     lines.append(f"\nTotal allocated: {round(total_allocated, 1)} kg of {round(total_supply, 1)} kg available supply.")
 

@@ -240,6 +240,10 @@ class AllocationItem(BaseModel):
     quantity: float = Field(..., gt=0)
     quality_grade: str
     collection_slot: Optional[str] = None
+    original_grade: Optional[str] = None
+    days_since_harvest: Optional[int] = 0
+    degradation_status: Optional[str] = "Fresh"
+    harvest_date: Optional[str] = None
 
 
 class MatchResult(BaseModel):
