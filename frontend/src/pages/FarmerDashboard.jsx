@@ -6,7 +6,7 @@ import {
   Sprout, Plus, Check, Truck, ShoppingCart, X, AlertTriangle, LogOut,
   History, MapPin, Ruler, Activity, Wallet, CreditCard, Phone, Mail,
   Shield, ChevronRight, BarChart3, TrendingUp, Leaf, Eye, EyeOff,
-  Map, User, FileText, Landmark, Star, Package
+  Map, User, FileText, Landmark, Star, Package, Bot, Send, Loader
 } from 'lucide-react';
 
 export default function FarmerDashboard() {
@@ -25,6 +25,15 @@ export default function FarmerDashboard() {
     estimated_quantity: '', quality_grade: 'A', harvest_date: new Date().toISOString().split('T')[0]
   });
   const [success, setSuccess] = useState(null);
+
+  // AI Chat state
+  const [showAIChat, setShowAIChat] = useState(false);
+  const [aiInput, setAiInput] = useState('');
+  const [aiMessages, setAiMessages] = useState([
+    { role: 'ai', text: "Hi! I'm your AI Harvest Assistant. Describe your harvest in plain English — e.g. \"I have 400 kg of Grade A tomatoes ready for tomorrow.\"" }
+  ]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiParsed, setAiParsed] = useState(null);
 
   const navigate = useNavigate();
 
@@ -76,6 +85,58 @@ export default function FarmerDashboard() {
 
   const handleAcceptRequest = (buyerName) => {
     setSuccess(`Accepted request from ${buyerName}! Transporter will be arranged.`);
+  };
+
+  const handleAISend = async () => {
+    if (!aiInput.trim() || !farmer) return;
+    const userMsg = aiInput.trim();
+    setAiMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setAiInput('');
+    setAiLoading(true);
+    setAiParsed(null);
+
+    await new Promise(r => setTimeout(r, 1200));
+
+    const lower = userMsg.toLowerCase();
+    const qtyMatch = lower.match(/(\d+)\s*kg/);
+    const gradeMatch = lower.match(/grade\s*([abc])/i);
+    const qty = qtyMatch ? parseInt(qtyMatch[1]) : null;
+    const grade = gradeMatch ? gradeMatch[1].toUpperCase() : 'A';
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const dateStr = lower.includes('tomorrow') ? tomorrow.toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+
+    if (qty) {
+      const parsed = { estimated_quantity: qty, quality_grade: grade, harvest_date: dateStr };
+      setAiParsed(parsed);
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        text: `✅ I parsed your harvest:\n\n📦 Quantity: **${qty} kg**\n⭐ Grade: **${grade}**\n📅 Date: **${dateStr}**\n\nShall I log this harvest for you? Click **"Confirm & Log"** below.`
+      }]);
+    } else {
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        text: `I couldn't detect a quantity. Try saying:\n\n"I have **500 kg** of Grade A tomatoes ready tomorrow."`
+      }]);
+    }
+    setAiLoading(false);
+  };
+
+  const handleAIConfirm = async () => {
+    if (!aiParsed || !farmer) return;
+    try {
+      await createHarvest({
+        farmer_id: farmer.id,
+        crop: 'Tomato',
+        ...aiParsed,
+        status: 'estimated'
+      });
+      setAiMessages(prev => [...prev, { role: 'ai', text: `🎉 Harvest of **${aiParsed.estimated_quantity} kg** (Grade ${aiParsed.quality_grade}) has been logged successfully!` }]);
+      setAiParsed(null);
+      setSuccess('Harvest logged via AI!');
+      loadData();
+    } catch {
+      setAiMessages(prev => [...prev, { role: 'ai', text: '❌ Failed to log harvest. Please try the manual form.' }]);
+    }
   };
 
   const handleLogout = () => {
@@ -175,9 +236,17 @@ export default function FarmerDashboard() {
                   </span>
                 </div>
               </div>
-              <button onClick={() => setShowHarvestForm(true)} className="flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-primary-500 text-white font-bold hover:bg-primary-400 transition-all shadow-lg shadow-primary-500/30 hover:shadow-primary-500/50 hover:-translate-y-1">
-                <Plus className="w-6 h-6" /> Log New Harvest
-              </button>
+              <div class="flex gap-3 flex-wrap">
+                <button
+                  onClick={() => setShowAIChat(true)}
+                  className="flex items-center justify-center gap-2 px-6 py-4 rounded-2xl bg-violet-600 text-white font-bold hover:bg-violet-500 transition-all shadow-lg shadow-violet-600/30 hover:-translate-y-1"
+                >
+                  <Bot className="w-5 h-5" /> AI Assistant
+                </button>
+                <button onClick={() => setShowHarvestForm(true)} className="flex items-center justify-center gap-2 px-8 py-4 rounded-2xl bg-primary-500 text-white font-bold hover:bg-primary-400 transition-all shadow-lg shadow-primary-500/30 hover:shadow-primary-500/50 hover:-translate-y-1">
+                  <Plus className="w-6 h-6" /> Log New Harvest
+                </button>
+              </div>
             </div>
 
             {/* ── Farmer Detail Cards Grid ── */}
@@ -629,6 +698,89 @@ export default function FarmerDashboard() {
               </div>
               <button type="submit" className="w-full py-4 mt-4 rounded-xl bg-primary-600 text-white font-bold text-lg hover:bg-primary-700 transition-colors shadow-lg shadow-primary-500/30 hover:-translate-y-0.5">Submit Harvest</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ AI HARVEST CHAT MODAL ═══ */}
+      {showAIChat && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 animate-fade-in" onClick={() => setShowAIChat(false)}>
+          <div className="bg-white rounded-3xl w-full max-w-lg mx-4 mb-4 sm:mb-0 shadow-2xl animate-scale-in overflow-hidden flex flex-col" style={{ maxHeight: '85vh' }} onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-violet-600 to-violet-800 p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
+                  <Bot className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <h2 className="font-bold text-white text-lg">AI Harvest Assistant</h2>
+                  <p className="text-violet-200 text-xs">Describe your harvest in plain English</p>
+                </div>
+              </div>
+              <button onClick={() => setShowAIChat(false)} className="p-2 hover:bg-white/10 rounded-xl transition-colors">
+                <X className="w-5 h-5 text-white/70" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50">
+              {aiMessages.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {msg.role === 'ai' && (
+                    <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center mr-2 flex-shrink-0 mt-1">
+                      <Bot className="w-4 h-4 text-violet-600" />
+                    </div>
+                  )}
+                  <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-line ${
+                    msg.role === 'user'
+                      ? 'bg-violet-600 text-white rounded-br-sm'
+                      : 'bg-white text-stone-800 border border-stone-200 rounded-bl-sm shadow-sm'
+                  }`}>
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              {aiLoading && (
+                <div className="flex justify-start">
+                  <div className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center mr-2 flex-shrink-0">
+                    <Bot className="w-4 h-4 text-violet-600" />
+                  </div>
+                  <div className="bg-white border border-stone-200 px-4 py-3 rounded-2xl rounded-bl-sm shadow-sm flex items-center gap-2">
+                    <Loader className="w-4 h-4 text-violet-500 animate-spin" />
+                    <span className="text-stone-400 text-sm">Parsing your harvest...</span>
+                  </div>
+                </div>
+              )}
+              {aiParsed && (
+                <div className="flex justify-start">
+                  <div className="w-8 h-8 mr-2 flex-shrink-0" />
+                  <button
+                    onClick={handleAIConfirm}
+                    className="px-6 py-3 rounded-xl bg-primary-600 text-white text-sm font-bold hover:bg-primary-700 transition-colors shadow-md"
+                  >
+                    ✅ Confirm & Log Harvest
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-stone-200 bg-white">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={aiInput}
+                  onChange={e => setAiInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAISend()}
+                  className="flex-1 px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500 outline-none text-sm"
+                  placeholder="e.g. I have 400 kg Grade A tomatoes for tomorrow..."
+                />
+                <button
+                  onClick={handleAISend}
+                  disabled={aiLoading || !aiInput.trim()}
+                  className="w-12 h-12 rounded-xl bg-violet-600 text-white flex items-center justify-center hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
