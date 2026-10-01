@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic>=2.10
+pydantic-settings
+python-dotenv
+google-generativeai
+httpx
+aiosqlite
