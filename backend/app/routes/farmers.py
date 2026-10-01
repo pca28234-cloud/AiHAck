@@ -132,6 +132,10 @@ async def list_harvests(db: AsyncSession = Depends(get_db)):
             farmer_name=farmer.name,
             farmer_location=farmer.location,
             producer_type=farmer.producer_type,
+            reserved_quantity=harvest.reserved_quantity or 0.0,
+            available_quantity=harvest.available_quantity,
+            cancelled_at=harvest.cancelled_at,
+            cancellation_reason=harvest.cancellation_reason,
         ))
     return harvests
 

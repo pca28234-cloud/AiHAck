@@ -53,5 +53,5 @@ echo
 echo   Then open http://localhost:5173
 echo ====================================
 echo.
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --port 8000
 pause

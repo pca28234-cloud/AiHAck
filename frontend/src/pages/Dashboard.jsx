@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   getFarmers, getHarvests, getBuyers, getVehicles,
-  getOrdersExtended, getOrderDetail, getUsers, getAdminDashboard
+  getOrdersExtended, getOrderDetail, getUsers, getAdminDashboard,
+  getCancellations
 } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -10,7 +11,7 @@ import {
   Network, Sprout, ShoppingCart, Truck, ArrowRight, ShieldCheck,
   Activity, Users, Route, X, CheckCircle2, Clock, MapPin, Phone,
   Mail, Calendar, DollarSign, ChevronRight, RefreshCw, LogOut,
-  IndianRupee, Layers, Eye, Check
+  IndianRupee, Layers, Eye, Check, Ban, AlertTriangle
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -30,6 +31,7 @@ export default function Dashboard() {
   const [vehicles, setVehicles] = useState([]);
   const [harvests, setHarvests] = useState([]);
   const [usersList, setUsersList] = useState([]);
+  const [cancellations, setCancellations] = useState([]);
   const [selectedOrderDetail, setSelectedOrderDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -41,13 +43,14 @@ export default function Dashboard() {
   const loadDashboardData = useCallback(async () => {
     try {
       setLoading(true);
-      const [fRes, hRes, bRes, vRes, oRes, uRes] = await Promise.allSettled([
+      const [fRes, hRes, bRes, vRes, oRes, uRes, cRes] = await Promise.allSettled([
         getFarmers(),
         getHarvests(),
         getBuyers(),
         getVehicles(),
         getOrdersExtended(),
         getUsers(),
+        getCancellations(),
       ]);
 
       const farmersData = fRes.status === 'fulfilled' ? fRes.value.data : [];
@@ -56,6 +59,7 @@ export default function Dashboard() {
       const vehiclesData = vRes.status === 'fulfilled' ? vRes.value.data : [];
       const ordersData = oRes.status === 'fulfilled' ? oRes.value.data : [];
       const usersData = uRes.status === 'fulfilled' ? uRes.value.data : [];
+      const cancellationsData = cRes.status === 'fulfilled' ? cRes.value.data : [];
 
       setFarmers(farmersData);
       setHarvests(harvestsData);
@@ -63,9 +67,10 @@ export default function Dashboard() {
       setVehicles(vehiclesData);
       setOrders(ordersData);
       setUsersList(usersData);
+      setCancellations(cancellationsData);
 
       const totalVol = harvestsData.reduce((sum, h) => sum + (h.sorted_quantity || h.estimated_quantity || 0), 0);
-      const activeO = ordersData.filter(o => !['delivered', 'rejected'].includes(o.status)).length;
+      const activeO = ordersData.filter(o => !['delivered', 'rejected', 'cancelled'].includes(o.status)).length;
 
       setStats({
         farmers: farmersData.length,
@@ -124,6 +129,7 @@ export default function Dashboard() {
 
   const statusBadge = (st) => {
     const s = (st || '').toLowerCase().replace(/_/g, ' ');
+    if (s.includes('cancelled')) return 'bg-rose-100 text-rose-800 border-rose-200';
     if (s.includes('delivered')) return 'bg-emerald-100 text-emerald-800 border-emerald-200';
     if (s.includes('transit')) return 'bg-violet-100 text-violet-800 border-violet-200';
     if (s.includes('pickup') || s.includes('picked')) return 'bg-amber-100 text-amber-800 border-amber-200';
@@ -141,6 +147,7 @@ export default function Dashboard() {
     { id: 'transporters', label: 'Transporters' },
     { id: 'harvests', label: `Harvests (${harvests.length})` },
     { id: 'orders', label: `Orders (${orders.length})` },
+    { id: 'cancellations', label: `Cancellations (${cancellations.length})` },
     { id: 'transport', label: `Transport (${vehicles.length})` },
     { id: 'history', label: 'History' },
   ];
@@ -307,6 +314,13 @@ export default function Dashboard() {
                               {o.display_status || o.status}
                             </span>
                           </div>
+
+                          {o.status === 'cancelled' && (
+                            <div className="mb-2 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200/80 rounded-xl px-3 py-1.5 flex items-center gap-1.5">
+                              <Ban className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                              <span>Cancelled by {o.cancelled_by || 'User'} • Reason: {o.cancellation_reason || 'Pre-pickup cancellation'}</span>
+                            </div>
+                          )}
 
                           <div className="grid sm:grid-cols-3 gap-3 text-xs text-stone-700 bg-stone-50 rounded-2xl p-4 border border-stone-100">
                             <div>
@@ -561,6 +575,96 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* ── TAB: CANCELLATIONS AUDIT LOG ── */}
+        {activeTab === 'cancellations' && (
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-sm p-6 mb-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="font-bold text-xl text-stone-900 flex items-center gap-2">
+                  <Ban className="w-5 h-5 text-rose-600" /> Cancellation Audit Log & Data Consistency ({cancellations.length})
+                </h2>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Permanent immutable record of all cancellations, inventory restoration, and revoked transport assignments.
+                </p>
+              </div>
+              <span className="text-xs font-mono font-bold bg-rose-50 text-rose-700 border border-rose-200 px-3 py-1 rounded-full">
+                {cancellations.length} Audited Events
+              </span>
+            </div>
+
+            {cancellations.length === 0 ? (
+              <div className="p-12 text-center text-stone-400">
+                <CheckCircle2 className="w-10 h-10 mx-auto mb-2 text-emerald-500 opacity-60" />
+                <p className="font-semibold text-stone-600">No cancellations recorded.</p>
+                <p className="text-xs text-stone-400 mt-1">All orders and requests are running smoothly across the network.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead>
+                    <tr className="bg-stone-50 text-stone-500 font-semibold uppercase tracking-wider text-xs border-b border-stone-100">
+                      <th className="px-5 py-3">Audit ID</th>
+                      <th className="px-5 py-3">Type</th>
+                      <th className="px-5 py-3">Order/Req #</th>
+                      <th className="px-5 py-3">Cancelled By</th>
+                      <th className="px-5 py-3">Participants</th>
+                      <th className="px-5 py-3">Crop & Grade</th>
+                      <th className="px-5 py-3">Restored Qty</th>
+                      <th className="px-5 py-3">Previous Status</th>
+                      <th className="px-5 py-3">Timestamp</th>
+                      <th className="px-5 py-3">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-stone-100">
+                    {cancellations.map((c) => (
+                      <tr key={c.id} className="hover:bg-stone-50/50">
+                        <td className="px-5 py-3 font-mono text-stone-400 text-xs">#{c.id}</td>
+                        <td className="px-5 py-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                            c.cancellation_type === 'order' ? 'bg-rose-100 text-rose-800' :
+                            c.cancellation_type === 'request' ? 'bg-amber-100 text-amber-800' :
+                            'bg-violet-100 text-violet-800'
+                          }`}>
+                            {c.cancellation_type}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 font-mono font-bold text-stone-900">
+                          {c.order_id ? `ORD${c.order_id.toString().padStart(3, '0')}` : (c.request_id ? `REQ#${c.request_id}` : `HV#${c.harvest_id}`)}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className="font-bold text-stone-900">{c.username}</span>
+                          <span className="text-stone-400 text-xs block uppercase text-[10px] font-semibold">{c.user_role}</span>
+                        </td>
+                        <td className="px-5 py-3 text-xs">
+                          <p className="text-stone-800">F: <span className="font-semibold">{c.farmer_name || 'Farmer'}</span></p>
+                          <p className="text-stone-500">B: <span className="font-semibold">{c.buyer_name || 'Buyer'}</span></p>
+                        </td>
+                        <td className="px-5 py-3 font-semibold text-stone-800">
+                          {c.crop} <span className="text-xs text-stone-500">(Grade {c.quality_grade})</span>
+                        </td>
+                        <td className="px-5 py-3 font-bold text-emerald-700">
+                          +{c.restored_quantity || c.quantity}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span className="text-xs font-semibold text-stone-600 bg-stone-100 px-2 py-0.5 rounded-md capitalize">
+                            {c.previous_status || 'active'}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-xs text-stone-500 font-mono">
+                          {c.created_at || '—'}
+                        </td>
+                        <td className="px-5 py-3 text-xs text-stone-700 italic max-w-xs truncate">
+                          "{c.reason || 'Cancelled by user'}"
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── ADMIN ORDER DETAILS MODAL (Requirement 13) ── */}
@@ -597,6 +701,38 @@ export default function Dashboard() {
             </div>
 
             <div className="p-7 space-y-6">
+              {/* Cancellation Audit Banner (if cancelled) */}
+              {selectedOrderDetail.status === 'cancelled' && (
+                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-5">
+                  <div className="flex items-center gap-2 text-rose-800 font-bold text-sm uppercase tracking-wider mb-2">
+                    <Ban className="w-5 h-5 text-rose-600" />
+                    Official Cancellation Audit Record
+                  </div>
+                  <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs text-rose-950 mt-3">
+                    <div className="bg-white/80 rounded-xl p-3 border border-rose-100">
+                      <p className="text-stone-400 font-bold uppercase text-[10px]">Cancelled By</p>
+                      <p className="font-bold text-stone-900 mt-0.5">{selectedOrderDetail.cancelled_by || 'User'}</p>
+                    </div>
+                    <div className="bg-white/80 rounded-xl p-3 border border-rose-100">
+                      <p className="text-stone-400 font-bold uppercase text-[10px]">Cancelled At</p>
+                      <p className="font-bold text-stone-900 mt-0.5">{selectedOrderDetail.cancelled_at || 'Recorded'}</p>
+                    </div>
+                    <div className="bg-white/80 rounded-xl p-3 border border-rose-100">
+                      <p className="text-stone-400 font-bold uppercase text-[10px]">Inventory Restored</p>
+                      <p className="font-bold text-emerald-700 mt-0.5">{selectedOrderDetail.quantity} Released back to Farmer</p>
+                    </div>
+                    <div className="bg-white/80 rounded-xl p-3 border border-rose-100">
+                      <p className="text-stone-400 font-bold uppercase text-[10px]">Transport State</p>
+                      <p className="font-bold text-sky-700 mt-0.5">Assigned Trucks Freed</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 bg-white/80 rounded-xl p-3 border border-rose-100 text-xs">
+                    <p className="text-stone-400 font-bold uppercase text-[10px]">Cancellation Reason</p>
+                    <p className="font-medium text-stone-800 mt-0.5">{selectedOrderDetail.cancellation_reason || 'Cancelled before transporter pickup'}</p>
+                  </div>
+                </div>
+              )}
+
               {/* Order Timeline (Requirement 13) */}
               <div className="bg-stone-50 rounded-2xl p-6 border border-stone-200">
                 <h3 className="font-bold text-stone-900 text-sm uppercase tracking-wider mb-4 flex items-center gap-2">

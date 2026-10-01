@@ -66,8 +66,15 @@ export const askWhatIf = (data) => api.post('/ai/what-if', data);
 export const getNotifications = (role) => api.get(`/notifications?role=${role}`);
 export const markNotificationRead = (id) => api.post(`/notifications/${id}/read`);
 
+// ──────────── CANCELLATIONS & AUDIT ────────────
+export const cancelOrder = (id, data = {}) => api.post(`/orders/${id}/cancel`, data);
+export const cancelBuyerRequest = (id, data = {}) => api.post(`/buyer-requests/${id}/cancel`, data);
+export const cancelHarvest = (id, data = {}) => api.post(`/harvests/${id}/cancel`, data);
+export const getCancellations = () => api.get('/admin/cancellations');
+
 // ──────────── DASHBOARD ────────────
 export const getDashboard = () => api.get('/dashboard');
 export const getAdminDashboard = () => api.get('/dashboard/admin');
 
 export default api;
+

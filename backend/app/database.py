@@ -40,7 +40,7 @@ async def init_db():
         from app.models.models import (  # noqa
             Farmer, Harvest, Buyer, Order, BuyerRequest,
             Vehicle, Allocation, TransportRecommendation,
-            TruckAllocation, Notification
+            TruckAllocation, Notification, CancellationHistory
         )
         await conn.run_sync(Base.metadata.create_all)
     print("Database initialized successfully")

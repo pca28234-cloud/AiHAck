@@ -217,33 +217,35 @@ export default function Login() {
                 </button>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1 ml-1">
-                    <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider">
-                      Username
-                    </label>
-                  </div>
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1 ml-1">
+                    Username
+                  </label>
                   <input
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all font-medium text-stone-800"
-                    placeholder="Username"
+                    placeholder={
+                      role === 'farmer'
+                        ? 'Enter username (e.g. farmer1)'
+                        : role === 'buyer'
+                        ? 'Enter username (e.g. buyer1)'
+                        : 'Enter username (e.g. transporter1)'
+                    }
                     required
                   />
                 </div>
 
                 <div>
-                  <div className="flex items-center justify-between mb-1 ml-1">
-                    <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider">
-                      Password
-                    </label>
-                  </div>
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1 ml-1">
+                    Password
+                  </label>
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-all font-medium text-stone-800"
-                    placeholder="Password"
+                    placeholder="Enter password"
                     required
                   />
                 </div>

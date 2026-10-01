@@ -73,32 +73,28 @@ export default function AdminLogin() {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <div className="flex items-center justify-between mb-1 ml-1">
-                <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider">
-                  Username
-                </label>
-              </div>
+              <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider mb-1 ml-1">
+                Username
+              </label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition-all font-medium"
-                placeholder="Username"
+                placeholder="Enter admin username"
                 required
               />
             </div>
             <div>
-              <div className="flex items-center justify-between mb-1 ml-1">
-                <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider">
-                  Password
-                </label>
-              </div>
+              <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider mb-1 ml-1">
+                Password
+              </label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition-all font-medium"
-                placeholder="Password"
+                placeholder="Enter password"
                 required
               />
             </div>
