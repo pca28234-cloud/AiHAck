@@ -2,7 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   getFarmers, getHarvests, createHarvest, getBuyerRequests,
   acceptOrder, rejectOrder, getTransportRecommendation,
-  getNotifications, getOrdersExtended, parseHarvest
+  getNotifications, getOrdersExtended, parseHarvest,
+  cancelOrder, cancelHarvest
 } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -15,7 +16,7 @@ import {
   Bell, Package, MapPin, Ruler, Activity, Eye, EyeOff,
   User, FileText, Landmark, Bot, RefreshCw, ChevronRight,
   IndianRupee, BarChart3, Clock, Shield, CreditCard, Phone, Mail,
-  Send, Loader, Sparkles
+  Send, Loader, Sparkles, Ban
 } from 'lucide-react';
 
 export default function FarmerDashboard() {
@@ -34,6 +35,17 @@ export default function FarmerDashboard() {
   const [showHarvestForm, setShowHarvestForm] = useState(false);
   const [showPan, setShowPan] = useState(false);
   const [submittingHarvest, setSubmittingHarvest] = useState(false);
+
+  // Cancellation modal state
+  const [cancelModal, setCancelModal] = useState({
+    open: false,
+    type: null, // 'order' | 'harvest'
+    id: null,
+    title: '',
+    reason: '',
+    loading: false
+  });
+
 
   // AI Assistant states
   const [showAIChat, setShowAIChat] = useState(false);
@@ -139,6 +151,14 @@ export default function FarmerDashboard() {
     } else if (event === 'transport_allocated') {
       setSuccess(`🚛 Transport allocated for Order #${data.order_id}`);
       loadData();
+    } else if (event === 'order_cancelled') {
+      setSuccess(`❌ Order #${data.order_id} was cancelled. Inventory restored.`);
+      loadData();
+    } else if (event === 'harvest_updated' || event === 'harvest_cancelled') {
+      loadData();
+    } else if (event === 'buyer_request_cancelled') {
+      setSuccess(`Buyer request #${data.request_id} was cancelled.`);
+      loadData();
     } else if (event === 'notification') {
       setNotifications(prev => [data, ...prev]);
     } else if (event === 'truck_status_updated') {
@@ -148,6 +168,33 @@ export default function FarmerDashboard() {
   }, [loadData]);
 
   useWebSocket('farmer', handleWsEvent);
+
+  const handleCancelConfirm = async () => {
+    if (!cancelModal.id || !cancelModal.type) return;
+    setCancelModal(prev => ({ ...prev, loading: true }));
+    try {
+      if (cancelModal.type === 'order') {
+        const res = await cancelOrder(cancelModal.id, {
+          reason: cancelModal.reason || 'Farmer cancelled the order before pickup',
+          cancelled_by: farmer?.username || 'farmer',
+          role: 'farmer',
+        });
+        setSuccess(res.data?.message || `Order #${cancelModal.id} has been cancelled and quantity restored.`);
+      } else if (cancelModal.type === 'harvest') {
+        const res = await cancelHarvest(cancelModal.id, {
+          reason: cancelModal.reason || 'Farmer removed harvest',
+          cancelled_by: farmer?.username || 'farmer',
+        });
+        setSuccess(res.data?.message || `Harvest #${cancelModal.id} has been cancelled.`);
+      }
+      setCancelModal({ open: false, type: null, id: null, title: '', reason: '', loading: false });
+      await loadData();
+    } catch (err) {
+      console.error('Cancellation error:', err);
+      setError(err.response?.data?.detail || 'Failed to cancel item.');
+      setCancelModal(prev => ({ ...prev, loading: false }));
+    }
+  };
 
   // Auto-dismiss success/error
   useEffect(() => {
@@ -610,7 +657,7 @@ export default function FarmerDashboard() {
                 <div className="px-6 py-5 border-b border-stone-100 flex items-center justify-between">
                   <div>
                     <h2 className="font-bold text-xl text-stone-900">My Harvests</h2>
-                    <p className="text-sm text-stone-500">Crops available for buyers</p>
+                    <p className="text-sm text-stone-500">Crops available for buyers • Live Inventory</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <button onClick={() => setShowAIChat(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-violet-100 text-violet-700 text-sm font-bold hover:bg-violet-200 transition-colors">
@@ -632,36 +679,63 @@ export default function FarmerDashboard() {
                       <thead className="bg-stone-50 border-b border-stone-100 text-stone-500 uppercase text-xs font-semibold tracking-wider">
                         <tr>
                           <th className="px-6 py-3">Crop</th>
-                          <th className="px-6 py-3">Quantity</th>
+                          <th className="px-6 py-3">Available / Total</th>
                           <th className="px-6 py-3">Grade</th>
                           <th className="px-6 py-3">Date</th>
                           <th className="px-6 py-3">Price (₹)</th>
                           <th className="px-6 py-3">Status</th>
+                          <th className="px-6 py-3 text-right">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-stone-100">
-                        {harvests.map(h => (
-                          <tr key={h.id} className="hover:bg-stone-50/50">
-                            <td className="px-6 py-4 font-semibold text-stone-900">{h.crop}</td>
-                            <td className="px-6 py-4 font-bold text-stone-900">
-                              {h.sorted_quantity || h.estimated_quantity}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${gradeColor[h.quality_grade] || 'bg-stone-100 text-stone-700'}`}>Grade {h.quality_grade}</span>
-                            </td>
-                            <td className="px-6 py-4 text-stone-600">{h.harvest_date}</td>
-                            <td className="px-6 py-4 text-stone-600">
-                              {h.expected_price ? `₹${h.expected_price}` : '—'}
-                            </td>
-                            <td className="px-6 py-4">
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-bold capitalize ${
-                                h.status === 'sorted' ? 'bg-primary-50 text-primary-700' :
-                                h.status === 'allocated' ? 'bg-violet-50 text-violet-700' :
-                                'bg-amber-50 text-amber-700'
-                              }`}>{h.status}</span>
-                            </td>
-                          </tr>
-                        ))}
+                        {harvests.map(h => {
+                          const totalQty = h.sorted_quantity || h.estimated_quantity;
+                          const availQty = h.available_quantity !== undefined ? h.available_quantity : totalQty;
+                          return (
+                            <tr key={h.id} className="hover:bg-stone-50/50">
+                              <td className="px-6 py-4 font-semibold text-stone-900">{h.crop}</td>
+                              <td className="px-6 py-4">
+                                <span className="font-bold text-stone-900">{availQty}</span>
+                                <span className="text-xs text-stone-400"> / {totalQty}</span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${gradeColor[h.quality_grade] || 'bg-stone-100 text-stone-700'}`}>Grade {h.quality_grade}</span>
+                              </td>
+                              <td className="px-6 py-4 text-stone-600">{h.harvest_date}</td>
+                              <td className="px-6 py-4 text-stone-600">
+                                {h.expected_price ? `₹${h.expected_price}` : '—'}
+                              </td>
+                              <td className="px-6 py-4">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-bold capitalize ${
+                                  h.status === 'cancelled' ? 'bg-rose-50 text-rose-700' :
+                                  h.status === 'sorted' ? 'bg-primary-50 text-primary-700' :
+                                  h.status === 'allocated' ? 'bg-violet-50 text-violet-700' :
+                                  'bg-amber-50 text-amber-700'
+                                }`}>{h.status}</span>
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                {h.status !== 'cancelled' ? (
+                                  <button
+                                    onClick={() => setCancelModal({
+                                      open: true,
+                                      type: 'harvest',
+                                      id: h.id,
+                                      title: `Harvest #${h.id} (${h.crop} Grade ${h.quality_grade})`,
+                                      reason: '',
+                                      loading: false
+                                    })}
+                                    className="px-2.5 py-1 text-xs font-bold text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-50 transition-colors"
+                                    title="Cancel and remove this harvest"
+                                  >
+                                    Cancel
+                                  </button>
+                                ) : (
+                                  <span className="text-xs font-medium text-rose-500 italic">Cancelled</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -682,6 +756,7 @@ export default function FarmerDashboard() {
                     <div
                       key={order.id}
                       className={`bg-white rounded-2xl border shadow-sm overflow-hidden cursor-pointer transition-all hover:shadow-md ${
+                        order.status === 'cancelled' ? 'border-rose-200 bg-rose-50/20' :
                         selectedOrderId === order.id ? 'border-violet-300 ring-2 ring-violet-100' : 'border-stone-200'
                       }`}
                       onClick={() => setSelectedOrderId(selectedOrderId === order.id ? null : order.id)}
@@ -692,6 +767,7 @@ export default function FarmerDashboard() {
                             <div className="flex items-center gap-2 mb-1">
                               <span className="font-bold text-stone-900">Order #{order.id}</span>
                               <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full border ${
+                                order.status === 'cancelled' ? 'bg-rose-50 text-rose-700 border-rose-200' :
                                 order.status === 'transport_allocated' ? 'bg-violet-50 text-violet-700 border-violet-100' :
                                 order.status === 'accepted' ? 'bg-primary-50 text-primary-700 border-primary-100' :
                                 order.status === 'delivered' ? 'bg-stone-100 text-stone-600 border-stone-200' :
@@ -701,14 +777,49 @@ export default function FarmerDashboard() {
                             <p className="text-sm text-stone-600">
                               <span className="font-semibold">{order.buyer_name}</span> — {order.quantity} Grade {order.quality_grade} {order.crop}
                             </p>
-                            {order.transport && (
+                            {order.transport && order.status !== 'cancelled' && (
                               <p className="text-xs text-violet-600 font-semibold mt-1">
                                 🚛 {order.transport.trucks_count} truck(s) allocated · ₹{order.transport.total_cost?.toLocaleString()}
                               </p>
                             )}
                           </div>
-                          <ChevronRight className={`w-5 h-5 text-stone-400 transition-transform ${selectedOrderId === order.id ? 'rotate-90' : ''}`} />
+                          
+                          <div className="flex items-center gap-2">
+                            {['requested', 'accepted', 'transport_allocated'].includes(order.status) && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCancelModal({
+                                    open: true,
+                                    type: 'order',
+                                    id: order.id,
+                                    title: `Order #${order.order_code || order.id} (${order.quantity} Grade ${order.quality_grade} ${order.crop})`,
+                                    reason: '',
+                                    loading: false
+                                  });
+                                }}
+                                className="px-3 py-1.5 rounded-xl border border-rose-200 bg-rose-50/50 text-rose-600 hover:bg-rose-100/70 text-xs font-bold flex items-center gap-1 transition-colors shadow-sm"
+                                title="Cancel this order before transporter pickup"
+                              >
+                                <Ban className="w-3.5 h-3.5" /> Cancel Order
+                              </button>
+                            )}
+                            <ChevronRight className={`w-5 h-5 text-stone-400 transition-transform ${selectedOrderId === order.id ? 'rotate-90' : ''}`} />
+                          </div>
                         </div>
+
+                        {/* Cancellation Info Banner */}
+                        {order.status === 'cancelled' && (
+                          <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-800">
+                            <p className="font-bold flex items-center gap-1.5">
+                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                              Order Cancelled: {order.cancellation_reason || 'Cancelled by user before pickup'}
+                            </p>
+                            <p className="text-[11px] text-rose-600 mt-0.5">
+                              {order.cancelled_at ? `Cancelled at ${order.cancelled_at}` : ''} • Crop quantity has been restored to your available inventory.
+                            </p>
+                          </div>
+                        )}
 
                         {/* Assigned Transporters and Truck Numbers */}
                         {order.transport?.trucks && order.transport.trucks.length > 0 && (
@@ -1002,6 +1113,73 @@ export default function FarmerDashboard() {
           </div>
         </div>
       )}
+
+      {/* ── CANCELLATION CONFIRMATION MODAL ── */}
+      {cancelModal.open && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={() => !cancelModal.loading && setCancelModal({ ...cancelModal, open: false })}>
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl animate-scale-in" onClick={e => e.stopPropagation()}>
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+              <Ban className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-xl text-stone-900 mb-1">
+              Confirm Cancellation
+            </h3>
+            <p className="text-sm text-stone-500 mb-4">
+              {cancelModal.title}
+            </p>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 mb-4 text-xs text-amber-900">
+              <p className="font-semibold flex items-center gap-1.5 mb-1">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                Data Consistency Guarantee:
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5 text-stone-600">
+                <li>Reserved quantity will be immediately restored to your available inventory.</li>
+                <li>Pending transport and allocations will be revoked.</li>
+                <li>Action will be audited and logged in Admin History.</li>
+              </ul>
+            </div>
+
+            <div className="mb-5">
+              <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
+                Cancellation Reason (Optional)
+              </label>
+              <input
+                type="text"
+                value={cancelModal.reason}
+                onChange={e => setCancelModal({ ...cancelModal, reason: e.target.value })}
+                placeholder="e.g. Produce damaged, logistics delay, duplicate order..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-stone-200 bg-stone-50 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={cancelModal.loading}
+                onClick={() => setCancelModal({ ...cancelModal, open: false })}
+                className="flex-1 py-2.5 rounded-xl border border-stone-200 text-stone-700 font-bold text-sm hover:bg-stone-50 transition-colors"
+              >
+                Keep Active
+              </button>
+              <button
+                type="button"
+                disabled={cancelModal.loading}
+                onClick={handleCancelConfirm}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm transition-colors shadow-sm flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {cancelModal.loading ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" /> Cancelling...
+                  </>
+                ) : (
+                  'Yes, Cancel Now'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

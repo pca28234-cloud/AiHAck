@@ -56,12 +56,15 @@ class Harvest(Base):
     crop = Column(String(50), default="Tomato")
     estimated_quantity = Column(Float, nullable=False)
     sorted_quantity = Column(Float, nullable=True)
+    reserved_quantity = Column(Float, default=0.0)    # quantity currently reserved for pending/active buyer requests
     quality_grade = Column(String(1), nullable=False)
     harvest_date = Column(String(20), nullable=False)
     available_date = Column(String(20), nullable=True)
     location = Column(String(200), nullable=True)
-    expected_price = Column(Float, nullable=True)   # price per kg in INR
-    status = Column(String(20), default="estimated")  # estimated, sorted, allocated, collected
+    expected_price = Column(Float, nullable=True)   # price in INR
+    status = Column(String(20), default="estimated")  # estimated, sorted, allocated, collected, cancelled
+    cancelled_at = Column(String(30), nullable=True)
+    cancellation_reason = Column(Text, nullable=True)
 
     farmer = relationship("Farmer", back_populates="harvests")
     allocations = relationship("Allocation", back_populates="harvest", cascade="all, delete-orphan")
@@ -69,10 +72,12 @@ class Harvest(Base):
 
     @property
     def available_quantity(self):
-        return self.sorted_quantity if self.sorted_quantity is not None else self.estimated_quantity
+        base = self.sorted_quantity if self.sorted_quantity is not None else self.estimated_quantity
+        res = self.reserved_quantity or 0.0
+        return max(0.0, base - res)
 
     def __repr__(self):
-        return f"<Harvest {self.crop} {self.available_quantity}kg Grade {self.quality_grade}>"
+        return f"<Harvest {self.crop} {self.available_quantity} Grade {self.quality_grade}>"
 
 
 class Buyer(Base):
@@ -105,14 +110,17 @@ class Order(Base):
     delivery_location = Column(String(200), nullable=True)
     recurring = Column(Boolean, default=False)
     frequency = Column(String(20), default="none")
-    status = Column(String(30), default="requested")  # requested, accepted, rejected, transport_allocated, pickup, in_transit, delivered
+    status = Column(String(30), default="requested")  # requested, accepted, rejected, transport_allocated, pickup_started, picked_up, in_transit, delivered, cancelled
+    cancelled_at = Column(String(30), nullable=True)
+    cancelled_by = Column(String(50), nullable=True)
+    cancellation_reason = Column(Text, nullable=True)
 
     buyer = relationship("Buyer", back_populates="orders")
     allocations = relationship("Allocation", back_populates="order", cascade="all, delete-orphan")
     transport_recommendations = relationship("TransportRecommendation", back_populates="order", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Order {self.quantity}kg Grade {self.quality_grade} [{self.status}]>"
+        return f"<Order {self.quantity} Grade {self.quality_grade} [{self.status}]>"
 
 
 class BuyerRequest(Base):
@@ -128,14 +136,42 @@ class BuyerRequest(Base):
     delivery_date = Column(String(20), nullable=False)
     delivery_location = Column(String(200), nullable=True)
     message = Column(Text, nullable=True)
-    status = Column(String(20), default="pending")  # pending, accepted, rejected
+    status = Column(String(20), default="pending")  # pending, accepted, rejected, cancelled
     created_at = Column(String(30), nullable=True)
+    cancelled_at = Column(String(30), nullable=True)
+    cancellation_reason = Column(Text, nullable=True)
 
     buyer = relationship("Buyer", back_populates="requests")
     harvest = relationship("Harvest", back_populates="buyer_requests")
 
     def __repr__(self):
-        return f"<BuyerRequest {self.quantity}kg [{self.status}]>"
+        return f"<BuyerRequest {self.quantity} [{self.status}]>"
+
+
+class CancellationHistory(Base):
+    """Records all farmer and buyer cancellations for audit and Admin History."""
+    __tablename__ = "cancellation_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cancellation_type = Column(String(20), nullable=False)  # 'order', 'request', 'harvest'
+    order_id = Column(Integer, nullable=True)
+    request_id = Column(Integer, nullable=True)
+    harvest_id = Column(Integer, nullable=True)
+    user_role = Column(String(20), nullable=False)  # 'farmer', 'buyer', 'admin'
+    username = Column(String(50), nullable=True)
+    farmer_name = Column(String(100), nullable=True)
+    buyer_name = Column(String(100), nullable=True)
+    crop = Column(String(50), nullable=True)
+    quality_grade = Column(String(10), nullable=True)
+    quantity = Column(Float, nullable=False)
+    previous_status = Column(String(30), nullable=False)
+    cancelled_status = Column(String(30), default="cancelled")
+    reason = Column(Text, nullable=True)
+    restored_quantity = Column(Float, default=0.0)
+    created_at = Column(String(30), nullable=False)
+
+    def __repr__(self):
+        return f"<CancellationHistory {self.cancellation_type} #{self.order_id or self.harvest_id} by {self.username}>"
 
 
 class Vehicle(Base):

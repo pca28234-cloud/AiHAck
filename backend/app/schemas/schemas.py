@@ -122,6 +122,10 @@ class HarvestResponse(BaseModel):
     farmer_name: Optional[str] = None
     farmer_location: Optional[str] = None
     producer_type: Optional[str] = None
+    reserved_quantity: Optional[float] = 0.0
+    available_quantity: Optional[float] = None
+    cancelled_at: Optional[str] = None
+    cancellation_reason: Optional[str] = None
 
     class Config:
         from_attributes = True

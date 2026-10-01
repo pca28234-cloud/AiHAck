@@ -53,6 +53,9 @@ export default function TransporterDashboard() {
     if (event === 'transport_allocated') {
       setSuccess(`🚛 New Transport Job Assigned! Order #${data.order_id}`);
       loadData();
+    } else if (event === 'order_cancelled') {
+      setSuccess(`⚠️ Order #${data.order_id} was cancelled. Truck released to available fleet.`);
+      loadData();
     } else if (event === 'truck_status_updated' || event === 'order_status_updated') {
       setSuccess(`Status updated: ${data.display_status || data.status}`);
       loadData();
@@ -93,6 +96,7 @@ export default function TransporterDashboard() {
 
   const statusBadge = (st) => {
     const s = (st || '').toLowerCase().replace(/_/g, ' ');
+    if (s.includes('cancelled')) return 'bg-rose-100 text-rose-800 border-rose-200';
     if (s.includes('delivered')) return 'bg-emerald-100 text-emerald-800 border-emerald-200';
     if (s.includes('transit')) return 'bg-violet-100 text-violet-800 border-violet-200';
     if (s.includes('pickup') || s.includes('picked')) return 'bg-amber-100 text-amber-800 border-amber-200';
@@ -103,8 +107,9 @@ export default function TransporterDashboard() {
     return <LoadingSpinner message="Loading Transporter Fleet & Jobs..." />;
   }
 
-  const activeJobs = jobs.filter(j => j.status !== 'delivered');
+  const activeJobs = jobs.filter(j => j.status !== 'delivered' && j.status !== 'cancelled');
   const deliveredJobs = jobs.filter(j => j.status === 'delivered');
+  const cancelledJobs = jobs.filter(j => j.status === 'cancelled');
 
   return (
     <div className="min-h-screen bg-surface-50 font-sans pb-16" id="transporter-dashboard">

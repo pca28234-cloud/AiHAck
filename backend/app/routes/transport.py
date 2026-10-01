@@ -4,7 +4,7 @@ HarvestLink AI — Orders, BuyerRequests, Transport & Notifications Routes
 This module handles the full flow:
   Buyer sends request → Farmer accepts/rejects → AI recommends trucks → Trucks allocated
 """
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
@@ -13,7 +13,8 @@ from datetime import datetime
 from app.database import get_db
 from app.models.models import (
     Farmer, Harvest, Buyer, Order, BuyerRequest,
-    Vehicle, TransportRecommendation, TruckAllocation, Notification, Allocation
+    Vehicle, TransportRecommendation, TruckAllocation, Notification, Allocation,
+    CancellationHistory
 )
 from app.websocket.manager import manager
 from app.services.transport_optimizer import optimize_transport, get_alternatives, TruckOption
@@ -82,7 +83,7 @@ async def websocket_endpoint(websocket: WebSocket, role: str = "all"):
 
 @router.get("/harvests/available")
 async def list_available_harvests(db: AsyncSession = Depends(get_db)):
-    """List harvests available for buyers to request (estimated or sorted status)."""
+    """List harvests available for buyers to request (estimated or sorted status with positive available quantity)."""
     result = await db.execute(
         select(Harvest, Farmer)
         .join(Farmer, Harvest.farmer_id == Farmer.id)
@@ -90,6 +91,8 @@ async def list_available_harvests(db: AsyncSession = Depends(get_db)):
     )
     harvests = []
     for harvest, farmer in result.all():
+        if harvest.available_quantity <= 0:
+            continue
         harvests.append({
             "id": harvest.id,
             "farmer_id": harvest.farmer_id,
@@ -98,6 +101,7 @@ async def list_available_harvests(db: AsyncSession = Depends(get_db)):
             "crop": harvest.crop,
             "estimated_quantity": harvest.estimated_quantity,
             "sorted_quantity": harvest.sorted_quantity,
+            "reserved_quantity": harvest.reserved_quantity or 0.0,
             "available_quantity": harvest.available_quantity,
             "quality_grade": harvest.quality_grade,
             "harvest_date": harvest.harvest_date,
@@ -134,12 +138,26 @@ async def create_buyer_request(
         raise HTTPException(status_code=404, detail="Buyer not found")
     if not harvest:
         raise HTTPException(status_code=404, detail="Harvest not found")
+    if harvest.status == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot request a cancelled harvest")
+
+    requested_qty = float(quantity)
+    if requested_qty > harvest.available_quantity:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested quantity ({requested_qty}) exceeds available supply ({harvest.available_quantity})"
+        )
+
+    # Reserve the quantity on the harvest
+    harvest.reserved_quantity = (harvest.reserved_quantity or 0.0) + requested_qty
+    if harvest.available_quantity <= 0:
+        harvest.status = "allocated"
 
     # Create an Order record too (status=requested)
     order = Order(
         buyer_id=buyer_id,
         harvest_id=harvest_id,
-        quantity=float(quantity),
+        quantity=requested_qty,
         quality_grade=quality_grade.upper(),
         delivery_date=delivery_date,
         delivery_location=delivery_location,
@@ -155,7 +173,7 @@ async def create_buyer_request(
         buyer_id=buyer_id,
         harvest_id=harvest_id,
         order_id=order.id,
-        quantity=float(quantity),
+        quantity=requested_qty,
         quality_grade=quality_grade.upper(),
         delivery_date=delivery_date,
         delivery_location=delivery_location,
@@ -289,11 +307,20 @@ async def reject_order(order_id: int, db: AsyncSession = Depends(get_db)):
 
     order.status = "rejected"
 
+    # Release reserved harvest quantity
+    harvest = await db.get(Harvest, order.harvest_id) if order.harvest_id else None
+    if harvest:
+        harvest.reserved_quantity = max(0.0, (harvest.reserved_quantity or 0.0) - order.quantity)
+        if harvest.status == "allocated" and harvest.available_quantity > 0:
+            harvest.status = "sorted" if harvest.sorted_quantity is not None else "estimated"
+
     br_result = await db.execute(
         select(BuyerRequest).where(BuyerRequest.order_id == order_id)
     )
     for br in br_result.scalars().all():
         br.status = "rejected"
+
+    await db.commit()
 
     await manager.broadcast_to_buyer("request_rejected", {
         "order_id": order_id,
@@ -310,6 +337,385 @@ async def reject_order(order_id: int, db: AsyncSession = Depends(get_db)):
     )
 
     return {"order_id": order_id, "status": "rejected"}
+
+
+# ──────────────────── ORDER & REQUEST CANCELLATIONS ────────────────────
+
+@router.post("/orders/{order_id}/cancel")
+async def cancel_order(
+    order_id: int,
+    data: dict = Body(default={}),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Cancel an active order (Farmer or Buyer action).
+    - Restores reserved harvest quantity to farmer inventory.
+    - Frees assigned trucks if transport was allocated before pickup.
+    - Cancels linked buyer request and recommendations.
+    - Enforces status rules (cannot cancel once picked up/in transit/delivered).
+    - Logs into CancellationHistory (Admin History).
+    - Emits real-time WebSocket events.
+    """
+    order = await db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Enforce status rules
+    if order.status in ("picked_up", "in_transit", "delivered"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel order #{order_id}: Produce has already been collected/picked up by transporter (Status: {order.status})."
+        )
+    if order.status == "cancelled":
+        raise HTTPException(status_code=400, detail=f"Order #{order_id} is already cancelled.")
+
+    prev_status = order.status
+    reason = data.get("reason", "").strip() or "Cancelled by user"
+    cancelled_by = data.get("cancelled_by", "").strip() or data.get("username", "").strip() or "User"
+    user_role = data.get("role", "").strip() or "user"
+
+    # 1. Update order
+    order.status = "cancelled"
+    order.cancelled_at = _now()
+    order.cancelled_by = f"{cancelled_by} ({user_role})"
+    order.cancellation_reason = reason
+
+    # 2. Release reserved harvest quantity back to farmer
+    restored_qty = 0.0
+    harvest = await db.get(Harvest, order.harvest_id) if order.harvest_id else None
+    if harvest:
+        restored_qty = order.quantity
+        harvest.reserved_quantity = max(0.0, (harvest.reserved_quantity or 0.0) - order.quantity)
+        if harvest.status == "allocated" and harvest.available_quantity > 0:
+            harvest.status = "sorted" if harvest.sorted_quantity is not None else "estimated"
+
+    # 3. Cancel linked BuyerRequest
+    br_result = await db.execute(
+        select(BuyerRequest).where(BuyerRequest.order_id == order_id)
+    )
+    for br in br_result.scalars().all():
+        br.status = "cancelled"
+        br.cancelled_at = _now()
+        br.cancellation_reason = reason
+
+    # 4. Cancel transport recommendation and free assigned trucks
+    rec_result = await db.execute(
+        select(TransportRecommendation).where(TransportRecommendation.order_id == order_id)
+    )
+    for rec in rec_result.scalars().all():
+        rec.status = "cancelled"
+        ta_result = await db.execute(
+            select(TruckAllocation).where(TruckAllocation.recommendation_id == rec.id)
+        )
+        for ta in ta_result.scalars().all():
+            ta.status = "cancelled"
+            v = await db.get(Vehicle, ta.vehicle_id)
+            if v:
+                v.status = "available"
+                v.available_capacity = v.capacity
+
+    # 5. Cancel any legacy Allocation
+    alloc_result = await db.execute(
+        select(Allocation).where(Allocation.order_id == order_id)
+    )
+    for a in alloc_result.scalars().all():
+        a.status = "cancelled"
+
+    # 6. Fetch participants for audit and notifications
+    buyer = await db.get(Buyer, order.buyer_id)
+    farmer = await db.get(Farmer, harvest.farmer_id) if (harvest and harvest.farmer_id) else None
+
+    # 7. Record in CancellationHistory for Admin audit
+    history_entry = CancellationHistory(
+        cancellation_type="order",
+        order_id=order.id,
+        harvest_id=harvest.id if harvest else None,
+        user_role=user_role,
+        username=cancelled_by,
+        farmer_name=farmer.name if farmer else "Farmer",
+        buyer_name=buyer.name if buyer else "Buyer",
+        crop=harvest.crop if harvest else "Tomato",
+        quality_grade=order.quality_grade,
+        quantity=order.quantity,
+        previous_status=prev_status,
+        cancelled_status="cancelled",
+        reason=reason,
+        restored_quantity=restored_qty,
+        created_at=_now(),
+    )
+    db.add(history_entry)
+    await db.commit()
+
+    # 8. Notifications
+    if farmer:
+        await _notify(
+            db, "farmer", "order_cancelled",
+            "Order Cancelled",
+            f"Order #ORD{order.id:03d} ({order.quantity} Grade {order.quality_grade}) was cancelled by {cancelled_by}. {restored_qty} has been released back to your available inventory.",
+            order_id=order.id,
+            user_id=farmer.id,
+        )
+    if buyer:
+        await _notify(
+            db, "buyer", "order_cancelled",
+            "Order Cancelled",
+            f"Order #ORD{order.id:03d} for {order.quantity} Grade {order.quality_grade} was cancelled by {cancelled_by}. Reason: {reason}.",
+            order_id=order.id,
+            user_id=buyer.id,
+        )
+    await _notify(
+        db, "admin", "order_cancelled",
+        f"Order #ORD{order.id:03d} Cancelled",
+        f"Order #ORD{order.id:03d} cancelled by {cancelled_by} ({user_role}). Previous: {prev_status}. Restored: {restored_qty}.",
+        order_id=order.id,
+    )
+
+    # 9. Real-time WebSocket broadcasts
+    payload = {
+        "order_id": order.id,
+        "order_code": f"ORD{order.id:03d}",
+        "previous_status": prev_status,
+        "status": "cancelled",
+        "cancelled_by": cancelled_by,
+        "reason": reason,
+        "restored_quantity": restored_qty,
+        "harvest_id": harvest.id if harvest else None,
+    }
+    await manager.broadcast_to_all("order_cancelled", payload)
+    await manager.broadcast_to_all("order_status_updated", payload)
+    if harvest:
+        await manager.broadcast_to_all("harvest_updated", {
+            "id": harvest.id,
+            "farmer_id": harvest.farmer_id,
+            "farmer_name": farmer.name if farmer else None,
+            "crop": harvest.crop,
+            "quantity": harvest.available_quantity,
+            "available_quantity": harvest.available_quantity,
+            "quality_grade": harvest.quality_grade,
+            "status": harvest.status,
+        })
+
+    return {
+        "success": True,
+        "order_id": order.id,
+        "status": "cancelled",
+        "previous_status": prev_status,
+        "restored_quantity": restored_qty,
+        "message": f"Order #ORD{order.id:03d} successfully cancelled. {restored_qty} released back to inventory.",
+    }
+
+
+@router.post("/buyer-requests/{request_id}/cancel")
+async def cancel_buyer_request(
+    request_id: int,
+    data: dict = Body(default={}),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Buyer cancels an active crop request.
+    If linked to an order, cascades to order cancellation.
+    """
+    br = await db.get(BuyerRequest, request_id)
+    if not br:
+        raise HTTPException(status_code=404, detail="Buyer request not found")
+
+    if br.status == "cancelled":
+        raise HTTPException(status_code=400, detail="Request is already cancelled")
+
+    # If linked to an order, cancel the order too
+    if br.order_id:
+        return await cancel_order(br.order_id, data=data, db=db)
+
+    prev_status = br.status
+    reason = data.get("reason", "").strip() or "Cancelled by buyer"
+    cancelled_by = data.get("cancelled_by", "").strip() or data.get("username", "").strip() or "buyer1"
+
+    br.status = "cancelled"
+    br.cancelled_at = _now()
+    br.cancellation_reason = reason
+
+    # Release reserved harvest quantity
+    restored_qty = 0.0
+    harvest = await db.get(Harvest, br.harvest_id)
+    if harvest:
+        restored_qty = br.quantity
+        harvest.reserved_quantity = max(0.0, (harvest.reserved_quantity or 0.0) - br.quantity)
+        if harvest.status == "allocated" and harvest.available_quantity > 0:
+            harvest.status = "sorted" if harvest.sorted_quantity is not None else "estimated"
+
+    buyer = await db.get(Buyer, br.buyer_id)
+    farmer = await db.get(Farmer, harvest.farmer_id) if (harvest and harvest.farmer_id) else None
+
+    history_entry = CancellationHistory(
+        cancellation_type="request",
+        request_id=br.id,
+        harvest_id=harvest.id if harvest else None,
+        user_role="buyer",
+        username=cancelled_by,
+        farmer_name=farmer.name if farmer else "Farmer",
+        buyer_name=buyer.name if buyer else "Buyer",
+        crop=harvest.crop if harvest else "Tomato",
+        quality_grade=br.quality_grade,
+        quantity=br.quantity,
+        previous_status=prev_status,
+        cancelled_status="cancelled",
+        reason=reason,
+        restored_quantity=restored_qty,
+        created_at=_now(),
+    )
+    db.add(history_entry)
+    await db.commit()
+
+    await manager.broadcast_to_all("buyer_request_cancelled", {
+        "request_id": br.id,
+        "harvest_id": br.harvest_id,
+        "buyer_id": br.buyer_id,
+        "status": "cancelled",
+    })
+    if harvest:
+        await manager.broadcast_to_all("harvest_updated", {
+            "id": harvest.id,
+            "farmer_id": harvest.farmer_id,
+            "crop": harvest.crop,
+            "quantity": harvest.available_quantity,
+            "available_quantity": harvest.available_quantity,
+            "status": harvest.status,
+        })
+
+    return {
+        "success": True,
+        "request_id": br.id,
+        "status": "cancelled",
+        "restored_quantity": restored_qty,
+        "message": f"Buyer request #{br.id} successfully cancelled.",
+    }
+
+
+@router.post("/harvests/{harvest_id}/cancel")
+async def cancel_harvest(
+    harvest_id: int,
+    data: dict = Body(default={}),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Farmer cancels/deletes an active harvest.
+    - Prevents cancellation if produce has already been picked up or delivered.
+    - Cancels any pending orders and requests.
+    - Removes from AI matching queue and buyer available list.
+    - Logs into CancellationHistory.
+    """
+    harvest = await db.get(Harvest, harvest_id)
+    if not harvest:
+        raise HTTPException(status_code=404, detail="Harvest not found")
+    if harvest.status == "cancelled":
+        raise HTTPException(status_code=400, detail="Harvest is already cancelled")
+
+    # Disallow if any linked order was already picked up or in transit
+    active_orders = await db.execute(
+        select(Order)
+        .where(Order.harvest_id == harvest_id)
+        .where(Order.status.in_(["picked_up", "in_transit", "delivered"]))
+    )
+    if active_orders.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot cancel harvest: Orders from this harvest have already been picked up or delivered by a transporter."
+        )
+
+    prev_status = harvest.status
+    reason = data.get("reason", "").strip() or "Cancelled by farmer"
+    cancelled_by = data.get("cancelled_by", "").strip() or data.get("username", "").strip() or "Farmer"
+
+    # Cancel all pending/accepted orders for this harvest
+    pending_orders = await db.execute(
+        select(Order)
+        .where(Order.harvest_id == harvest_id)
+        .where(Order.status.notin_(["cancelled", "delivered", "rejected"]))
+    )
+    for o in pending_orders.scalars().all():
+        o.status = "cancelled"
+        o.cancelled_at = _now()
+        o.cancelled_by = cancelled_by
+        o.cancellation_reason = f"Harvest cancelled: {reason}"
+
+        # Free trucks
+        rec_result = await db.execute(
+            select(TransportRecommendation).where(TransportRecommendation.order_id == o.id)
+        )
+        for rec in rec_result.scalars().all():
+            rec.status = "cancelled"
+            tas = await db.execute(
+                select(TruckAllocation).where(TruckAllocation.recommendation_id == rec.id)
+            )
+            for ta in tas.scalars().all():
+                ta.status = "cancelled"
+                v = await db.get(Vehicle, ta.vehicle_id)
+                if v:
+                    v.status = "available"
+                    v.available_capacity = v.capacity
+
+    # Cancel pending buyer requests
+    brs = await db.execute(
+        select(BuyerRequest)
+        .where(BuyerRequest.harvest_id == harvest_id)
+        .where(BuyerRequest.status.in_(["pending", "accepted"]))
+    )
+    for br in brs.scalars().all():
+        br.status = "cancelled"
+        br.cancelled_at = _now()
+        br.cancellation_reason = f"Harvest cancelled: {reason}"
+
+    harvest.status = "cancelled"
+    harvest.cancelled_at = _now()
+    harvest.cancellation_reason = reason
+    harvest.reserved_quantity = 0.0
+
+    farmer = await db.get(Farmer, harvest.farmer_id)
+
+    history_entry = CancellationHistory(
+        cancellation_type="harvest",
+        harvest_id=harvest.id,
+        user_role="farmer",
+        username=cancelled_by,
+        farmer_name=farmer.name if farmer else "Farmer",
+        buyer_name="All Buyers",
+        crop=harvest.crop,
+        quality_grade=harvest.quality_grade,
+        quantity=harvest.estimated_quantity,
+        previous_status=prev_status,
+        cancelled_status="cancelled",
+        reason=reason,
+        restored_quantity=0.0,
+        created_at=_now(),
+    )
+    db.add(history_entry)
+    await db.commit()
+
+    await manager.broadcast_to_all("harvest_cancelled", {
+        "harvest_id": harvest.id,
+        "farmer_id": harvest.farmer_id,
+        "crop": harvest.crop,
+    })
+    await manager.broadcast_to_all("order_cancelled", {
+        "harvest_id": harvest.id,
+        "reason": reason,
+    })
+
+    return {
+        "success": True,
+        "harvest_id": harvest.id,
+        "status": "cancelled",
+        "message": "Harvest cancelled successfully and removed from active listings.",
+    }
+
+
+@router.get("/admin/cancellations")
+async def list_cancellations(db: AsyncSession = Depends(get_db)):
+    """Get all cancellation audit history records for the Admin panel."""
+    result = await db.execute(
+        select(CancellationHistory).order_by(CancellationHistory.id.desc())
+    )
+    return result.scalars().all()
 
 
 # ──────────────────── TRANSPORT AGENT ────────────────────
@@ -823,6 +1229,13 @@ async def get_order_detail(order_id: int, db: AsyncSession = Depends(get_db)):
         {"name": "In Transit", "done": st in ["picked_up", "in_transit", "delivered"], "active": st in ["picked_up", "in_transit"]},
         {"name": "Delivered", "done": st == "delivered", "active": st == "delivered"},
     ]
+    if st == "cancelled":
+        stages.append({
+            "name": "Order Cancelled",
+            "done": True,
+            "active": True,
+            "is_cancelled": True,
+        })
 
     return {
         "id": order.id,
@@ -833,6 +1246,11 @@ async def get_order_detail(order_id: int, db: AsyncSession = Depends(get_db)):
         "quality_grade": order.quality_grade,
         "delivery_date": order.delivery_date,
         "delivery_location": order.delivery_location or (buyer.location if buyer else ""),
+        "cancellation": {
+            "cancelled_at": getattr(order, "cancelled_at", None),
+            "cancelled_by": getattr(order, "cancelled_by", None),
+            "reason": getattr(order, "cancellation_reason", None),
+        } if st == "cancelled" else None,
         "farmer": {
             "id": farmer.id if farmer else None,
             "username": getattr(farmer, "username", "farmer1"),
@@ -931,6 +1349,9 @@ async def list_orders_extended(db: AsyncSession = Depends(get_db)):
             "farmer_location": farmer.location if farmer else "",
             "transporter_name": "Raj Transport Services",
             "crop": harvest.crop if harvest else "Tomato",
+            "cancelled_at": getattr(order, "cancelled_at", None),
+            "cancelled_by": getattr(order, "cancelled_by", None),
+            "cancellation_reason": getattr(order, "cancellation_reason", None),
             "transport": transport_summary,
         })
     return out
