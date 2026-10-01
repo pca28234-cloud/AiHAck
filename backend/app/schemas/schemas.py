@@ -13,6 +13,11 @@ class FarmerCreate(BaseModel):
     location: str = Field(..., min_length=1, max_length=200)
     farm_size: float = Field(..., gt=0, description="Farm size in hectares")
     producer_type: str = Field(..., description="'small' or 'large'")
+    pan_card: Optional[str] = Field(None, max_length=10, description="PAN card number")
+    land_location: Optional[str] = Field(None, max_length=300, description="Detailed land address or GPS coordinates")
+    phone: Optional[str] = Field(None, max_length=15, description="Contact phone number")
+    email: Optional[str] = Field(None, max_length=100, description="Contact email")
+    aadhaar_last4: Optional[str] = Field(None, max_length=4, description="Last 4 digits of Aadhaar")
 
     @field_validator("producer_type")
     @classmethod
@@ -21,6 +26,16 @@ class FarmerCreate(BaseModel):
             raise ValueError("producer_type must be 'small' or 'large'")
         return v.lower()
 
+    @field_validator("pan_card")
+    @classmethod
+    def validate_pan_card(cls, v):
+        if v is not None:
+            import re
+            if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', v.upper()):
+                raise ValueError("Invalid PAN card format (expected: ABCDE1234F)")
+            return v.upper()
+        return v
+
 
 class FarmerResponse(BaseModel):
     id: int
@@ -28,6 +43,11 @@ class FarmerResponse(BaseModel):
     location: str
     farm_size: float
     producer_type: str
+    pan_card: Optional[str] = None
+    land_location: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    aadhaar_last4: Optional[str] = None
 
     class Config:
         from_attributes = True
