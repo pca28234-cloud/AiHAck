@@ -77,42 +77,30 @@ export default function AdminLogin() {
                 <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider">
                   Username
                 </label>
-                <span className="text-[11px] font-mono text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-200">
-                  // This is username: admin
-                </span>
               </div>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition-all font-medium"
-                placeholder="This is username: admin"
+                placeholder="Username"
                 required
               />
-              <div className="mt-1.5 p-2 bg-stone-50 rounded-lg border border-stone-200/80 text-[12px] font-mono text-stone-700">
-                💬 <strong>// This is username:</strong> <code className="text-sky-700 font-bold bg-white px-1.5 py-0.5 rounded border border-stone-200">admin</code>
-              </div>
             </div>
             <div>
               <div className="flex items-center justify-between mb-1 ml-1">
                 <label className="block text-xs font-bold text-stone-600 uppercase tracking-wider">
                   Password
                 </label>
-                <span className="text-[11px] font-mono text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-200">
-                  // This is password: 1234
-                </span>
               </div>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-stone-200 bg-stone-50 text-stone-900 focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition-all font-medium"
-                placeholder="This is password: 1234"
+                placeholder="Password"
                 required
               />
-              <div className="mt-1.5 p-2 bg-stone-50 rounded-lg border border-stone-200/80 text-[12px] font-mono text-stone-700">
-                💬 <strong>// This is password:</strong> <code className="text-sky-700 font-bold bg-white px-1.5 py-0.5 rounded border border-stone-200">1234</code>
-              </div>
             </div>
 
             <button

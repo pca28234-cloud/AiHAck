@@ -90,7 +90,7 @@ def calculate_degradation(supply: List[SupplyItem]) -> List[SupplyItem]:
         if s.days_since_harvest < 0:
             s.days_since_harvest = 0
             
-        degradation_steps = s.days_since_harvest // 4
+        degradation_steps = max(0, s.days_since_harvest - 1) // 4
         
         grades = ["A", "B", "C", "Degraded"]
         try:
@@ -125,22 +125,7 @@ def run_matching(
     fairness_weight: float = 0.3,
 ) -> Dict[str, Any]:
     """
-    Deterministic matching engine with fairness consideration.
-
-    Algorithm:
-    1. Sort supply by fairness priority (small producers first, fewer previous allocations first)
-    2. For each demand order, match compatible supply (quality check)
-    3. Respect transport capacity
-    4. Track collection slots per producer type
-
-    Args:
-        supply: available harvests
-        demand: buyer orders
-        transport: available vehicles
-        fairness_weight: 0.0 = pure efficiency, 1.0 = maximum small-producer priority
-
-    Returns:
-        Complete allocation result with metrics
+    Deterministic matching engine with 60/40 fairness consideration per order.
     """
     # ── Step 0: Calculate degradation and filter out unusable items ──
     supply = calculate_degradation(supply)
@@ -159,68 +144,86 @@ def run_matching(
     if total_transport <= 0:
         return _empty_result(supply, demand, transport, "Available transport capacity is insufficient for the current demand.")
 
-    # ── Step 1: Sort supply with fairness priority ──
-    # Small producers first, then by fewer previous allocations, then by available quantity
-    def supply_priority(s: SupplyItem) -> tuple:
-        type_score = 0 if s.producer_type == "small" else 1
-        # Weight the type score by fairness parameter
-        weighted_type = type_score * fairness_weight
-        return (weighted_type, s.previous_allocations, -s.available_quantity)
-
-    sorted_supply = sorted(supply, key=supply_priority)
-
-    # ── Step 2: Sort demand by urgency (recurring first, then by quantity) ──
+    # ── Sort demand by urgency (recurring first, then by quantity) ──
     sorted_demand = sorted(demand, key=lambda d: (not d.recurring, -d.quantity))
 
-    # ── Step 3: Allocate ──
     allocations: List[AllocationResult] = []
     remaining_transport = total_transport
-    supply_remaining = {s.harvest_id: s.available_quantity for s in sorted_supply}
+    supply_remaining = {s.harvest_id: s.available_quantity for s in supply}
     slot_counter = 1
 
     for d in sorted_demand:
-        if d.remaining <= 0:
+        if d.remaining <= 0 or remaining_transport <= 0:
             continue
 
-        for s in sorted_supply:
-            if d.remaining <= 0:
+        # Filter eligible supply
+        eligible_supply = [s for s in supply if supply_remaining[s.harvest_id] > 0 and quality_matches(s.quality_grade, d.quality_grade)]
+
+        # Separate into small and large
+        small_group = [s for s in eligible_supply if s.producer_type == "small"]
+        large_group = [s for s in eligible_supply if s.producer_type == "large"]
+
+        # Sort by FIFO (previous_allocations, then available_quantity)
+        small_group.sort(key=lambda s: (s.previous_allocations, -supply_remaining[s.harvest_id]))
+        large_group.sort(key=lambda s: (s.previous_allocations, -supply_remaining[s.harvest_id]))
+
+        # Calculate quotas
+        target_small = d.remaining * 0.6
+        target_large = d.remaining * 0.4
+
+        # Allocate from small
+        allocated_small = 0
+        for s in small_group:
+            if allocated_small >= target_small or d.remaining <= 0 or remaining_transport <= 0:
                 break
-            if supply_remaining.get(s.harvest_id, 0) <= 0:
-                continue
-            if remaining_transport <= 0:
+            alloc_amt = min(supply_remaining[s.harvest_id], d.remaining, remaining_transport, target_small - allocated_small)
+            if alloc_amt > 0:
+                allocations.append(AllocationResult(
+                    harvest_id=s.harvest_id, farmer_name=s.farmer_name, producer_type=s.producer_type,
+                    order_id=d.order_id, buyer_name=d.buyer_name, quantity=round(alloc_amt, 1),
+                    quality_grade=s.quality_grade, collection_slot=f"Slot {slot_counter}"
+                ))
+                supply_remaining[s.harvest_id] -= alloc_amt
+                d.remaining -= alloc_amt
+                remaining_transport -= alloc_amt
+                allocated_small += alloc_amt
+                slot_counter += 1
+
+        # Allocate from large
+        allocated_large = 0
+        target_large_adjusted = target_large + (target_small - allocated_small) # If small didn't fill quota, large can fill it
+        for s in large_group:
+            if allocated_large >= target_large_adjusted or d.remaining <= 0 or remaining_transport <= 0:
                 break
-
-            # Quality check
-            if not quality_matches(s.quality_grade, d.quality_grade):
-                continue
-
-            # Calculate allocatable quantity
-            allocatable = min(
-                supply_remaining[s.harvest_id],
-                d.remaining,
-                remaining_transport,
-            )
-
-            if allocatable <= 0:
-                continue
-
-            # Create allocation
-            allocations.append(AllocationResult(
-                harvest_id=s.harvest_id,
-                farmer_name=s.farmer_name,
-                producer_type=s.producer_type,
-                order_id=d.order_id,
-                buyer_name=d.buyer_name,
-                quantity=round(allocatable, 1),
-                quality_grade=s.quality_grade,
-                collection_slot=f"Slot {slot_counter}",
-            ))
-
-            # Update remaining quantities
-            supply_remaining[s.harvest_id] -= allocatable
-            d.remaining -= allocatable
-            remaining_transport -= allocatable
-            slot_counter += 1
+            alloc_amt = min(supply_remaining[s.harvest_id], d.remaining, remaining_transport, target_large_adjusted - allocated_large)
+            if alloc_amt > 0:
+                allocations.append(AllocationResult(
+                    harvest_id=s.harvest_id, farmer_name=s.farmer_name, producer_type=s.producer_type,
+                    order_id=d.order_id, buyer_name=d.buyer_name, quantity=round(alloc_amt, 1),
+                    quality_grade=s.quality_grade, collection_slot=f"Slot {slot_counter}"
+                ))
+                supply_remaining[s.harvest_id] -= alloc_amt
+                d.remaining -= alloc_amt
+                remaining_transport -= alloc_amt
+                allocated_large += alloc_amt
+                slot_counter += 1
+                
+        # If there's still demand left, and small farmers can fulfill it (because large didn't fill their quota)
+        if d.remaining > 0 and remaining_transport > 0:
+            for s in small_group:
+                if d.remaining <= 0 or remaining_transport <= 0:
+                    break
+                alloc_amt = min(supply_remaining[s.harvest_id], d.remaining, remaining_transport)
+                if alloc_amt > 0:
+                    allocations.append(AllocationResult(
+                        harvest_id=s.harvest_id, farmer_name=s.farmer_name, producer_type=s.producer_type,
+                        order_id=d.order_id, buyer_name=d.buyer_name, quantity=round(alloc_amt, 1),
+                        quality_grade=s.quality_grade, collection_slot=f"Slot {slot_counter}"
+                    ))
+                    supply_remaining[s.harvest_id] -= alloc_amt
+                    d.remaining -= alloc_amt
+                    remaining_transport -= alloc_amt
+                    slot_counter += 1
 
     # ── Step 4: Compute metrics ──
     total_supply = sum(s.available_quantity for s in supply)
@@ -250,7 +253,7 @@ def run_matching(
     if total_small > 0 and len(small_included) == 0:
         fairness_notes.append("⚠ No small producers included — consider adjusting fairness weight")
     if len(small_included) > 0 and len(large_included) > 0:
-        fairness_notes.append("✓ Collection distributed across both small and large producers")
+        fairness_notes.append("✓ Collection distributed across both small and large producers (60/40 rule applied)")
     fairness_notes.append("✓ Allocation quantities validated against actual availability")
     fairness_notes.append("✓ Transport capacity respected")
 
